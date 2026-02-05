@@ -2,7 +2,7 @@ import numpy as np
 
 def boxcar_averager(data_times, data, interp_times):
   '''
-  Boxcare averages data onto interp_times using the neareast timestamps in data_times,
+  Boxcar averages data onto interp_times using the neareast timestamps in data_times,
   with window width determined by interp_times / data_times.
 
   Parameters
