@@ -1,6 +1,7 @@
 import numpy as np
 from pyspedas import get_data, store_data, tinterpol, subtract
 import scipy.signal
+from boxcar_averager import boxcar_averager
 
 def lorentz(e_field, b_field, bulkv, spintone=None):
     '''
