@@ -87,7 +87,7 @@ def boxcar_averager(data_times, data, interp_times):
           f"Computed window width ({width}) is less than 1. "
           f"interp_times spacing (dt2={dt2:.3e}) may be too small "
           f"compared to data_times spacing (dt1={dt1:.3e})"
-        ))
+        )
 
   half = width // 2
 
