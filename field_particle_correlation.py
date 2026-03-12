@@ -290,9 +290,6 @@ def highpass(data, cutoff, sample_rate, order):
     return filtered_data
 
 
-import numpy as np
-from pytplot import get_data, store_data, tinterpol
-
 SPECIES = {
     'ion': {
         'q': 1.60217663e-19,
