@@ -418,11 +418,47 @@ SPECIES = {
     }
 }
 
+def _compute_vth(dist, species, spacecraft_id, direction):
+    q = SPECIES[species]['q']
+    mass = SPECIES[species]['m']
+    inst = 'dis' if species == 'ion' else 'des'
+    temp_dir = 'para' if direction == 'parallel' else 'perp'
+    temp_tvar = f'mms{spacecraft_id}_{inst}_temp{temp_dir}_brst'
+    temp_data = get_data(temp_tvar)
+    if temp_data is None:
+        raise ValueError(f"Could not retrieve temperature variable '{temp_tvar}'.")
+    return np.sqrt(2 * np.abs(q) * np.mean(temp_data.y) / mass)
+
+
+def _compute_vnorm(dist, bulkv, species, vth, eigen):
+    q = SPECIES[species]['q']
+    mass = SPECIES[species]['m']
+    energy = np.array([d['energy'] for d in dist], dtype=float)
+    theta = np.deg2rad(np.array([dist[0]['theta']], dtype=float))
+    phi = np.deg2rad(np.array([dist[0]['phi']], dtype=float))
+    energy = np.where(energy > 0, energy, 1e-12)
+    v = np.sqrt(2 * energy * np.abs(q) / mass)
+
+    bulkv_data = get_data(bulkv)
+    ve0 = np.mean(bulkv_data.y, axis=0) * 1e3
+    vx = v * np.cos(theta[0]) * np.cos(phi[0]) - ve0[0]
+    vy = v * np.cos(theta[0]) * np.sin(phi[0]) - ve0[1]
+    vz = v * np.sin(theta[0])                  - ve0[2]
+    vvec = np.stack([vx, vy, vz], axis=-1)
+
+    vpar   = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
+    vperp1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
+    vperp2 = np.tensordot(vvec, eigen[2], axes=([-1], [0]))
+    vperp  = np.sqrt(vperp1**2 + vperp2**2)
+
+    vpar_n  = np.nanmean(vpar,  axis=0).ravel() / vth
+    vperp_n = np.nanmean(vperp, axis=0).ravel() / vth
+    return vpar_n, vperp_n
 
 def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 cutoff=1, order=5, direction='parallel',
                                 species='electron', counts_to_mask=0,
-                                spacecraft_id=1):
+                                spacecraft_id=1, vpar_edges=None, vperp_edges=None):
     '''
     Computes the field-particle correlation C(v_par, v_perp) for a given
     particle species and field direction, binned onto a 2D velocity-space grid
@@ -453,15 +489,37 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     species : str, optional
         Particle species, either 'ion' or 'electron'. Default is 'electron'.
     counts_to_mask : int, optional
-        Minimum bin count threshold below which bins are masked. Default is 0.
+        Minimum bin count threshold below which bins are masked as NaN. Default is 0.
     spacecraft_id : int, optional
         MMS spacecraft ID (1-4). Default is 1.
+    vpar_edges : ndarray, optional
+        Pre-computed parallel velocity bin edges normalised by vth, shape (nbins+1,).
+        If provided, overrides internal edge calculation. Used internally by the
+        interleave branch to enforce a consistent grid across both distribution subsets.
+        Default is None.
+    vperp_edges : ndarray, optional
+        Pre-computed perpendicular velocity bin edges normalised by vth, shape (nbins+1,).
+        If provided, overrides internal edge calculation. Used internally by the
+        interleave branch to enforce a consistent grid across both distribution subsets.
+        Default is None.
 
     Returns
     -------
     c_binned : ndarray
         2D array of binned correlation values in (v_par, v_perp) space,
         normalised by thermal velocity. Bins below counts_to_mask are NaN.
+        Shape (nbins, nbins).
+    sumC : ndarray
+        2D array of summed (unmasked) correlation values before normalisation
+        by bin counts. Returned for use in interleave accumulation.
+        Shape (nbins, nbins).
+    counts : ndarray
+        2D array of particle counts per bin. Returned for use in interleave
+        accumulation. Shape (nbins, nbins).
+    vpar_edges : ndarray
+        Parallel velocity bin edges normalised by vth, shape (nbins+1,).
+    vperp_edges : ndarray
+        Perpendicular velocity bin edges normalised by vth, shape (nbins+1,).
 
     Raises
     ------
@@ -469,7 +527,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         If tplot variable name arguments are not strings, or dist is not a list.
     ValueError
         If species or direction are invalid, inputs are empty or malformed,
-        or required tplot variables cannot be retrieved.
+        required tplot variables cannot be retrieved, or nbins is too small.
     '''
 
     # --- Input validation ---
@@ -489,13 +547,22 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     # --- Interleave mode: recurse on alternating distributions ---
     if dist[0]['energy'].tolist() != dist[1]['energy'].tolist():
-        _, sumc1, counts1, vpar_edges, vperp_edges = field_particle_correlation(
+
+        vth = _compute_vth(dist, species, spacecraft_id, direction)
+        vpar_n, vperp_n = _compute_vnorm(dist, bulkv, species, vth, eigen)
+        nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+        vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), nbins + 1)
+        vperp_edges = np.linspace(0, vperp_n.max(), nbins + 1)
+
+        _, sumc1, counts1, _, _ = field_particle_correlation(
             dist[0::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id
+            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges
         )
         _, sumc2, counts2, _, _ = field_particle_correlation(
             dist[1::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id
+            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges
         )
         sumc = sumc1 + sumc2
         counts = counts1 + counts2
@@ -620,8 +687,10 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     if nbins < 2:
         raise ValueError(f"Computed nbins ({nbins}) is too small. Check velocity range and thermal velocity.")
 
-    vpar_edges  = np.linspace(vpar_n.min(),  vpar_n.max(),  nbins + 1)
-    vperp_edges = np.linspace(0,             vperp_n.max(), nbins + 1)
+    if vpar_edges is None:
+      
+      vpar_edges  = np.linspace(vpar_n.min(),  vpar_n.max(),  nbins + 1)
+      vperp_edges = np.linspace(0,             vperp_n.max(), nbins + 1)
 
     # --- 2D histogram ---
     sumC, _, _   = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=c_flat)
