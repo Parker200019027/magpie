@@ -459,7 +459,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 cutoff=1, order=5, direction='parallel',
                                 species='electron', counts_to_mask=0,
                                 spacecraft_id=1, vpar_edges=None, vperp_edges=None,
-                                nbins=None):
+                                nbins=None, apply_filter=True):
     '''
     Computes the field-particle correlation C(v_par, v_perp) for a given
     particle species and field direction, binned onto a 2D velocity-space grid
@@ -621,11 +621,16 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     e = get_data(smooth_name)
     if e is None:
         raise ValueError(f"Could not retrieve smoothed E field '{smooth_name}'.")
-    sample_rate = 1 / np.median(np.diff(bulkv_data.times))
-    e_filt = highpass(e.y, cutoff, sample_rate, order)
+      
+    if apply_filter:
+      sample_rate = 1 / np.median(np.diff(bulkv_data.times))
+      e_filt = highpass(e.y, cutoff, sample_rate, order)
+      store_data('e_filt', data={'x': e.times, 'y': e_filt})
+      tinterpol('e_filt', t_dist, newname='e_filt_interp')
 
-    store_data('e_filt', data={'x': e.times, 'y': e_filt})
-    tinterpol('e_filt', t_dist, newname='e_filt_interp')
+    else:
+      tinterpol(smooth_name, t_dist, newname='e_filt_interp')
+      
     e_interp = get_data('e_filt_interp')
     if e_interp is None:
         raise ValueError("Could not retrieve interpolated E field 'e_filt_interp'.")
