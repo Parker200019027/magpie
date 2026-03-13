@@ -595,7 +595,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # --- Flatten and mask ---
     vperp = np.sqrt(vperp_1 ** 2 + vperp_2 ** 2)
 
-    c_flat     = np.nanmean(c, axis=0).ravel()     if c.ndim > 2 else c.ravel()
+    c_flat     = c.ravel()
     vpar_flat  = np.nanmean(vpar, axis=0).ravel()
     vperp_flat = np.nanmean(vperp, axis=0).ravel()
 
