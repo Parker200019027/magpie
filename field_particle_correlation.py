@@ -458,7 +458,8 @@ def _compute_vnorm(dist, bulkv, species, vth, eigen):
 def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 cutoff=1, order=5, direction='parallel',
                                 species='electron', counts_to_mask=0,
-                                spacecraft_id=1, vpar_edges=None, vperp_edges=None):
+                                spacecraft_id=1, vpar_edges=None, vperp_edges=None,
+                                nbins=None):
     '''
     Computes the field-particle correlation C(v_par, v_perp) for a given
     particle species and field direction, binned onto a 2D velocity-space grid
@@ -591,12 +592,12 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         _, sumc1, counts1, _, _ = field_particle_correlation(
             dist[0::2], e_field, b_field, bulkv, spintone,
             cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=nbins
         )
         _, sumc2, counts2, _, _ = field_particle_correlation(
             dist[1::2], e_field, b_field, bulkv, spintone,
             cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=nbins
         )
         sumc = sumc1 + sumc2
         counts = counts1 + counts2
@@ -679,10 +680,11 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     vperp_n = vperp_flat / vth
 
     # --- Bin edges ---
-    if direction == 'parallel':
-        nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
-    else:
-        nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
+    if nbins is None:
+      if direction == 'parallel':
+          nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+      else:
+          nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
 
     if nbins < 2:
         raise ValueError(f"Computed nbins ({nbins}) is too small. Check velocity range and thermal velocity.")
