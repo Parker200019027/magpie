@@ -545,32 +545,6 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     if not isinstance(spacecraft_id, (int, np.integer)) or spacecraft_id not in (1, 2, 3, 4):
         raise ValueError(f"spacecraft_id must be an integer 1-4, got {spacecraft_id}")
 
-    # --- Interleave mode: recurse on alternating distributions ---
-    if dist[0]['energy'].tolist() != dist[1]['energy'].tolist():
-
-        vth = _compute_vth(dist, species, spacecraft_id, direction)
-        vpar_n, vperp_n = _compute_vnorm(dist, bulkv, species, vth, eigen)
-        nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
-        vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), nbins + 1)
-        vperp_edges = np.linspace(0, vperp_n.max(), nbins + 1)
-
-        _, sumc1, counts1, _, _ = field_particle_correlation(
-            dist[0::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges
-        )
-        _, sumc2, counts2, _, _ = field_particle_correlation(
-            dist[1::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges
-        )
-        sumc = sumc1 + sumc2
-        counts = counts1 + counts2
-        c_binned = np.full_like(sumc, np.nan, dtype=float)
-        mask = counts > counts_to_mask
-        c_binned[mask] = sumc[mask] / counts[mask]
-        return c_binned, sumC, counts, vpar_edges, vperp_edges
-
     # --- Species constants ---
     q = SPECIES[species]['q']
     mass = SPECIES[species]['m']
@@ -604,6 +578,32 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # --- Lorentz transform and FAC basis ---
     smooth_name, b_xyz, v_ms_avg = lorentz(e_field, b_field, bulkv, spintone)
     eigen = eigenvectors(b_xyz, v_ms_avg)
+
+    # --- Interleave mode: recurse on alternating distributions ---
+    if dist[0]['energy'].tolist() != dist[1]['energy'].tolist():
+
+        vth = _compute_vth(dist, species, spacecraft_id, direction)
+        vpar_n, vperp_n = _compute_vnorm(dist, bulkv, species, vth, eigen)
+        nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+        vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), nbins + 1)
+        vperp_edges = np.linspace(0, vperp_n.max(), nbins + 1)
+
+        _, sumc1, counts1, _, _ = field_particle_correlation(
+            dist[0::2], e_field, b_field, bulkv, spintone,
+            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges
+        )
+        _, sumc2, counts2, _, _ = field_particle_correlation(
+            dist[1::2], e_field, b_field, bulkv, spintone,
+            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+            vpar_edges=vpar_edges, vperp_edges=vperp_edges
+        )
+        sumc = sumc1 + sumc2
+        counts = counts1 + counts2
+        c_binned = np.full_like(sumc, np.nan, dtype=float)
+        mask = counts > counts_to_mask
+        c_binned[mask] = sumc[mask] / counts[mask]
+        return c_binned, sumc, counts, vpar_edges, vperp_edges
 
     vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
     vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
