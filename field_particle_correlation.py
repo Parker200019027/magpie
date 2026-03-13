@@ -631,9 +631,9 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         raise ValueError("Could not retrieve interpolated E field 'e_filt_interp'.")
 
     # --- Project E onto FAC basis ---
-    epar    = np.dot(e_interp.y, eigen[0])
-    eperp_1 = np.dot(e_interp.y, eigen[1])
-    eperp_2 = np.dot(e_interp.y, eigen[2])
+    epar    = np.dot(e_interp.y * 1e-3, eigen[0])
+    eperp_1 = np.dot(e_interp.y * 1e-3, eigen[1])
+    eperp_2 = np.dot(e_interp.y * 1e-3, eigen[2])
 
     # --- Correlation ---
     if direction == 'parallel':
