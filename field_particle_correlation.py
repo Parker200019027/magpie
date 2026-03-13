@@ -569,10 +569,10 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     # --- Correlation ---
     if direction == 'parallel':
-        c = q * vpar * epar[:, None, None] * del_f
+        c = q * vpar * epar[:, None, None, None] * del_f
     elif direction == 'perpendicular':
-        c1 = q * vperp_1 * eperp_1[:, None, None] * del_f
-        c2 = q * vperp_2 * eperp_2[:, None, None] * del_f
+        c1 = q * vperp_1 * eperp_1[:, None, None, None] * del_f
+        c2 = q * vperp_2 * eperp_2[:, None, None, None] * del_f
         c = c1 + c2
 
     c = np.nanmean(c, axis=0)
