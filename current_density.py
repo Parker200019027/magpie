@@ -107,12 +107,6 @@ def current_density(n, vp, ve):
   # Check for physical validity
   if np.any(n < 0):
       raise ValueError("Number density n cannot contain negative values")
-  if np.any(~np.isfinite(n)):
-      raise ValueError("Number density n contains NaN or Inf values")
-  if np.any(~np.isfinite(vp)):
-      raise ValueError("Proton velocity vp contains NaN or Inf values")
-  if np.any(~np.isfinite(ve)):
-      raise ValueError("Electron velocity ve contains NaN or Inf values")
     
   # Warn if density is suspiciously high or low (optional, can be removed if too strict)
   if np.any(n > 1e8):  # > 10^8 cm^-3 is very high for magnetosphere
