@@ -489,11 +489,11 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     # --- Interleave mode: recurse on alternating distributions ---
     if dist[0]['energy'].tolist() != dist[1]['energy'].tolist():
-        sumc1, counts1 = field_particle_correlation(
+        _, sumc1, counts1, vpar_edges, vperp_edges = field_particle_correlation(
             dist[0::2], e_field, b_field, bulkv, spintone,
             cutoff, order, direction, species, counts_to_mask, spacecraft_id
         )
-        sumc2, counts2 = field_particle_correlation(
+        _, sumc2, counts2, _, _ = field_particle_correlation(
             dist[1::2], e_field, b_field, bulkv, spintone,
             cutoff, order, direction, species, counts_to_mask, spacecraft_id
         )
@@ -502,7 +502,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         c_binned = np.full_like(sumc, np.nan, dtype=float)
         mask = counts > counts_to_mask
         c_binned[mask] = sumc[mask] / counts[mask]
-        return c_binned
+        return c_binned, sumC, counts, vpar_edges, vperp_edges
 
     # --- Species constants ---
     q = SPECIES[species]['q']
@@ -631,4 +631,4 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     mask = counts > counts_to_mask
     c_binned[mask] = sumC[mask] / counts[mask]
 
-    return c_binned
+    return c_binned, sumC, counts, vpar_edges, vperp_edges
