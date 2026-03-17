@@ -459,7 +459,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 cutoff=1, order=5, direction='parallel',
                                 species='electron', counts_to_mask=0,
                                 spacecraft_id=1, vpar_edges=None, vperp_edges=None,
-                                nbins=None, apply_filter=True):
+                                nbins=None, apply_filter=True, vmax=None):
     '''
     Computes the field-particle correlation C(v_par, v_perp) for a given
     particle species and field direction, binned onto a 2D velocity-space grid
@@ -684,20 +684,31 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     vpar_n  = vpar_flat  / vth
     vperp_n = vperp_flat / vth
 
+    # --- Clamp velocity range if vmax specified ---
+    if vmax is not None:
+        mask = (np.abs(vpar_n) <= vmax) & (vperp_n <= vmax)
+        vpar_n  = vpar_n[mask]
+        vperp_n = vperp_n[mask]
+        # You'll need to apply the same mask to f_flat and E_flat too
+        f_flat = f_flat[mask]
+        E_flat = E_flat[mask]  # or whichever field component you're correlating
+
     # --- Bin edges ---
     if nbins is None:
-      if direction == 'parallel':
-          nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
-      else:
-          nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
-
+        if direction == 'parallel':
+            nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+        else:
+            nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
     if nbins < 2:
-        raise ValueError(f"Computed nbins ({nbins}) is too small. Check velocity range and thermal velocity.")
+        raise ValueError(f"Computed nbins ({nbins}) is too small.")
 
     if vpar_edges is None:
-      
-      vpar_edges  = np.linspace(vpar_n.min(),  vpar_n.max(),  nbins + 1)
-      vperp_edges = np.linspace(0,             vperp_n.max(), nbins + 1)
+        if vmax is not None:
+            vpar_edges  = np.linspace(-vmax, vmax,  nbins + 1)
+            vperp_edges = np.linspace(0,     vmax,  nbins + 1)
+        else:
+            vpar_edges  = np.linspace(vpar_n.min(),  vpar_n.max(),  nbins + 1)
+            vperp_edges = np.linspace(0,             vperp_n.max(), nbins + 1)
 
     # --- 2D histogram ---
     sumC, _, _   = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=c_flat)
