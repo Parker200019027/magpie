@@ -689,9 +689,6 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         mask = (np.abs(vpar_n) <= vmax) & (vperp_n <= vmax)
         vpar_n  = vpar_n[mask]
         vperp_n = vperp_n[mask]
-        # You'll need to apply the same mask to f_flat and E_flat too
-        f_flat = f_flat[mask]
-        E_flat = E_flat[mask]  # or whichever field component you're correlating
 
     # --- Bin edges ---
     if nbins is None:
