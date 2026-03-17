@@ -583,28 +583,34 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # --- Interleave mode: recurse on alternating distributions ---
     if dist[0]['energy'].tolist() != dist[1]['energy'].tolist():
 
-        vth = _compute_vth(dist, species, spacecraft_id, direction)
-        vpar_n, vperp_n = _compute_vnorm(dist, bulkv, species, vth, eigen)
-        nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
-        vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), nbins + 1)
-        vperp_edges = np.linspace(0, vperp_n.max(), nbins + 1)
+      vth = _compute_vth(dist, species, spacecraft_id, direction)
 
-        _, sumc1, counts1, _, _ = field_particle_correlation(
-            dist[0::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=nbins
-        )
-        _, sumc2, counts2, _, _ = field_particle_correlation(
-            dist[1::2], e_field, b_field, bulkv, spintone,
-            cutoff, order, direction, species, counts_to_mask, spacecraft_id,
-            vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=nbins
-        )
-        sumc = sumc1 + sumc2
-        counts = counts1 + counts2
-        c_binned = np.full_like(sumc, np.nan, dtype=float)
-        mask = counts > counts_to_mask
-        c_binned[mask] = sumc[mask] / counts[mask]
-        return c_binned, sumc, counts, vpar_edges, vperp_edges
+      if vmax is not None:
+          _nbins = nbins if nbins is not None else 60
+          vpar_edges  = np.linspace(-vmax, vmax, _nbins + 1)
+          vperp_edges = np.linspace(0,     vmax, _nbins + 1)
+      else:
+          vpar_n, vperp_n = _compute_vnorm(dist, bulkv, species, vth, eigen)
+          _nbins = nbins if nbins is not None else int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+          vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), _nbins + 1)
+          vperp_edges = np.linspace(0, vperp_n.max(), _nbins + 1)
+
+      _, sumc1, counts1, _, _ = field_particle_correlation(
+          dist[0::2], e_field, b_field, bulkv, spintone,
+          cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+          vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
+      )
+      _, sumc2, counts2, _, _ = field_particle_correlation(
+          dist[1::2], e_field, b_field, bulkv, spintone,
+          cutoff, order, direction, species, counts_to_mask, spacecraft_id,
+          vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
+      )
+      sumc = sumc1 + sumc2
+      counts = counts1 + counts2
+      c_binned = np.full_like(sumc, np.nan, dtype=float)
+      mask = counts > counts_to_mask
+      c_binned[mask] = sumc[mask] / counts[mask]
+      return c_binned, sumc, counts, vpar_edges, vperp_edges
 
     vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
     vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
@@ -684,18 +690,15 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     vpar_n  = vpar_flat  / vth
     vperp_n = vperp_flat / vth
 
-    # --- Clamp velocity range if vmax specified ---
-    if vmax is not None:
-        mask = (np.abs(vpar_n) <= vmax) & (vperp_n <= vmax)
-        vpar_n  = vpar_n[mask]
-        vperp_n = vperp_n[mask]
-
     # --- Bin edges ---
     if nbins is None:
-        if direction == 'parallel':
-            nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
-        else:
-            nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
+      if vmax is not None:
+          nbins = 60
+      else:
+          if direction == 'parallel':
+              nbins = int(((vpar_n.max() - vpar_n.min()) * 100) // 10) + 20
+          else:
+              nbins = int(((vperp_n.max() - vperp_n.min()) * 100) // 10) + 20
     if nbins < 2:
         raise ValueError(f"Computed nbins ({nbins}) is too small.")
 
