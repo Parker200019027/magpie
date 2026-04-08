@@ -612,6 +612,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
       f_binned = np.full_like(sumf, np.nan, dtype=float)
       mask = counts > counts_to_mask
       c_binned[mask] = sumc[mask] / counts[mask]
+      f_bined[mask] = sumf[mask] / counts[mask]
       return c_binned, sumc, counts, vpar_edges, vperp_edges, sumf, f_binned
 
     vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
@@ -729,5 +730,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     sumF, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=f_flat)
                                   
     f_binned = np.full_like(sumF, np.nan, dtype=float)
+    mask = counts > counts_to_mask
+    f_binned[mask] = sumF[mask] / counts[mask]
 
     return c_binned, sumC, counts, vpar_edges, vperp_edges, sumF, f_binned
