@@ -595,22 +595,24 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
           vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), _nbins + 1)
           vperp_edges = np.linspace(0, vperp_n.max(), _nbins + 1)
 
-      _, sumc1, counts1, _, _ = field_particle_correlation(
+      _, sumc1, counts1, _, sumF1, _ = field_particle_correlation(
           dist[0::2], e_field, b_field, bulkv, spintone,
           cutoff, order, direction, species, counts_to_mask, spacecraft_id,
           vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
       )
-      _, sumc2, counts2, _, _ = field_particle_correlation(
+      _, sumc2, counts2, _, sumF2, _ = field_particle_correlation(
           dist[1::2], e_field, b_field, bulkv, spintone,
           cutoff, order, direction, species, counts_to_mask, spacecraft_id,
           vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
       )
       sumc = sumc1 + sumc2
+      sumf = sumF1 + sumF2
       counts = counts1 + counts2
       c_binned = np.full_like(sumc, np.nan, dtype=float)
+      f_binned = np.full_like(sumf, np.nan, dtype=float)
       mask = counts > counts_to_mask
       c_binned[mask] = sumc[mask] / counts[mask]
-      return c_binned, sumc, counts, vpar_edges, vperp_edges
+      return c_binned, sumc, counts, vpar_edges, vperp_edges, sumf, f_binned
 
     vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
     vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
@@ -674,6 +676,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # --- Flatten and mask ---
     vperp = np.sqrt(vperp_1 ** 2 + vperp_2 ** 2)
 
+    f_flat     = f.ravel()                              
     c_flat     = c.ravel()
     vpar_flat  = np.nanmean(vpar, axis=0).ravel()
     vperp_flat = np.nanmean(vperp, axis=0).ravel()
@@ -682,6 +685,9 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     c_flat     = c_flat[finite_mask]
     vpar_flat  = vpar_flat[finite_mask]
     vperp_flat = vperp_flat[finite_mask]
+
+    if f_flat.size == 0:
+        raise ValueError("Distribution has 0 values. Check input data")
 
     if c_flat.size == 0:
         raise ValueError("No finite correlation values remain after masking. Check input data.")
@@ -718,4 +724,9 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     mask = counts > counts_to_mask
     c_binned[mask] = sumC[mask] / counts[mask]
 
-    return c_binned, sumC, counts, vpar_edges, vperp_edges
+    # --- 2D Distribution Histogram ---
+    sumF, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=f_flat)
+                                  
+    f_binned = np.full_like(sumF, np.nan, dtype=float)
+
+    return c_binned, sumC, counts, vpar_edges, vperp_edges, , sumF, f_binned
