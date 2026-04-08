@@ -595,12 +595,12 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
           vpar_edges  = np.linspace(vpar_n.min(), vpar_n.max(), _nbins + 1)
           vperp_edges = np.linspace(0, vperp_n.max(), _nbins + 1)
 
-      _, sumc1, counts1, _, sumF1, _ = field_particle_correlation(
+      _, sumc1, counts1, _, _, sumF1, _ = field_particle_correlation(
           dist[0::2], e_field, b_field, bulkv, spintone,
           cutoff, order, direction, species, counts_to_mask, spacecraft_id,
           vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
       )
-      _, sumc2, counts2, _, sumF2, _ = field_particle_correlation(
+      _, sumc2, counts2, _, _, sumF2, _ = field_particle_correlation(
           dist[1::2], e_field, b_field, bulkv, spintone,
           cutoff, order, direction, species, counts_to_mask, spacecraft_id,
           vpar_edges=vpar_edges, vperp_edges=vperp_edges, nbins=_nbins, vmax=vmax
