@@ -729,4 +729,4 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                   
     f_binned = np.full_like(sumF, np.nan, dtype=float)
 
-    return c_binned, sumC, counts, vpar_edges, vperp_edges, , sumF, f_binned
+    return c_binned, sumC, counts, vpar_edges, vperp_edges, sumF, f_binned
