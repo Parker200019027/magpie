@@ -676,13 +676,14 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # --- Flatten and mask ---
     vperp = np.sqrt(vperp_1 ** 2 + vperp_2 ** 2)
 
-    f_flat     = f.ravel()                              
+    f_flat     = np.nanmean(f, axis=0).ravel()                              
     c_flat     = c.ravel()
     vpar_flat  = np.nanmean(vpar, axis=0).ravel()
     vperp_flat = np.nanmean(vperp, axis=0).ravel()
 
     finite_mask = np.isfinite(c_flat) & np.isfinite(vpar_flat) & np.isfinite(vperp_flat)
     c_flat     = c_flat[finite_mask]
+    f_flat     = f_flat[finite_mask]                              
     vpar_flat  = vpar_flat[finite_mask]
     vperp_flat = vperp_flat[finite_mask]
 
