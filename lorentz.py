@@ -1,3 +1,6 @@
+import numpy as np
+import pyspedas
+
 def lorentz(e_field, b_field, bulkv, spintone=None):
     '''
     Transforms the electric field from the spacecraft frame to the plasma frame
