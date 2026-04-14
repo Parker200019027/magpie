@@ -252,7 +252,7 @@ def fpc_uncertainty(dist,
   sample = np.stack([vpar_flat, vperp_1_flat, vperp_2_flat], axis=1)
 
   sumS2 = {k: np.zeros((nbins_par, nbins_perp1, nbins_perp2)) for k in ('par', 'perp1', 'perp2')}
-  counts = np.histogramdd(sample, bins=[vpar_edges, vperp_1_edges, vperp_2_edges])
+  counts, _ = np.histogramdd(sample, bins=[vpar_edges, vperp_1_edges, vperp_2_edges])
 
   for t_idx in range(n_t):
       for key in ('par', 'perp1', 'perp2'):
