@@ -1,5 +1,5 @@
 import numpy as np
-from pyspedas import get_data, tinterpol, store_data
+from pyspedas import get_data, store_data, tinterpol, subtract
 
 def lorentz(e_field, b_field, bulkv, spintone=None):
     '''
