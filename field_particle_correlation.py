@@ -563,10 +563,10 @@ def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f,
     return result
 
 
-def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth,
+def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
                      species, counts_to_mask,
                      vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
-                     nbins, projection):
+                     nbins, projection, ecut):
     '''
     Core correlation computation for a single chunk of distributions, using
     pre-filtered E field data passed in directly. Always computes correlations
@@ -627,7 +627,12 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth,
     if energy.size == 0:
         raise ValueError("Energy array is empty in this chunk.")
 
+    # --- Optional photoelectron cut ---
+    if ecut is not None:
+        energy = np.where(energy > ecut, energy, np.nan)
+
     energy = np.where(energy > 0, energy, 1e-12)
+
     v      = np.sqrt(2 * energy * np.abs(q) / mass)
 
     # --- Interpolate pre-filtered E onto this chunk's distribution times ---
@@ -650,9 +655,9 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth,
     del_f  = f - mean_f
 
     # --- Velocity vectors in FAC ---
-    vx   = v * np.cos(theta[0]) * np.cos(phi[0])
-    vy   = v * np.cos(theta[0]) * np.sin(phi[0])
-    vz   = v * np.sin(theta[0])
+    vx   = v * np.cos(theta[0]) * np.cos(phi[0]) - ve0[0]
+    vy   = v * np.cos(theta[0]) * np.sin(phi[0]) - ve0[1]
+    vz   = v * np.sin(theta[0]) - ve0[2]
     vvec = np.stack([vx, vy, vz], axis=-1)
 
     vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
@@ -688,7 +693,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 spacecraft_id=1, vpar_edges=None, vperp_edges=None,
                                 vperp1_edges=None, vperp2_edges=None,
                                 nbins=None, apply_filter=True, vmax=6,
-                                n_subintervals=None, projection='gyro'):
+                                n_subintervals=None, projection='gyro', ecut=None):
     '''
     Computes the field-particle correlation C(v) for all three FAC field
     components (E_par, E_perp1, E_perp2) simultaneously, binned onto a
@@ -812,6 +817,9 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     smooth_name, b_xyz, v_ms_avg = lorentz(e_field, b_field, bulkv, spintone)
     eigen = eigenvectors(b_xyz, v_ms_avg)
 
+    # --- Bulk velocity for frame transformation ---
+    ve0 = v_ms_avg  # already in m/s, computed inside lorentz()
+
     e_smooth   = get_data(smooth_name)
     bulkv_data = get_data(bulkv)
     if bulkv_data is None:
@@ -856,16 +864,16 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         '''Run _correlate_chunk on a subset of dists, handling interleave.'''
         if is_interleaved:
             r0 = _correlate_chunk(
-                subset[0::2], e_filt_y, e_filt_times, eigen, vth,
+                subset[0::2], e_filt_y, e_filt_times, eigen, vth, ve0,
                 species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
-                _nbins, projection
+                _nbins, projection, ecut
             )
             r1 = _correlate_chunk(
-                subset[1::2], e_filt_y, e_filt_times, eigen, vth,
+                subset[1::2], e_filt_y, e_filt_times, eigen, vth, ve0,
                 species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
-                _nbins, projection
+                _nbins, projection, ecut
             )
             # Accumulate counts and distribution
             counts = r0['counts'] + r1['counts']
@@ -888,10 +896,10 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
             return merged
         else:
             return _correlate_chunk(
-                subset, e_filt_y, e_filt_times, eigen, vth,
+                subset, e_filt_y, e_filt_times, eigen, vth, ve0,
                 species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
-                _nbins, projection
+                _nbins, projection, ecut
             )
 
     # =========================================================================
@@ -927,8 +935,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     # =========================================================================
 
     if n_subintervals is None:
-        # Single chunk — return as-is with sub_times=None
-        return chunk_results[0], edges, None
+        return chunk_results[0], edges, None, eigen, vth, ve0
 
     # Time-resolved — stack c_binned and f_binned along a leading time axis
     result = {
@@ -942,4 +949,4 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
             'sumC':     None,
         }
 
-    return result, edges, sub_times
+    return result, edges, sub_times, eigen, vth, ve0
