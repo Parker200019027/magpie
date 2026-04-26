@@ -373,8 +373,8 @@ def _compute_vth(species, spacecraft_id, direction):
     return np.sqrt(2 * np.abs(q) * np.mean(temp_data.y) / mass)
 
 
-def _project_gyro(c_dict, vpar, vperp, f, disterr,
-                  vth, vpar_edges, vperp_edges, counts_to_mask):
+def _project_gyro(c_dict, vpar, vperp, f,
+                  vth, vpar_edges, vperp_edges):
     '''
     Projects a dict of correlation arrays and the distribution onto a 2D
     (v_par, |v_perp|) grid, assuming gyrotropy.
@@ -399,8 +399,6 @@ def _project_gyro(c_dict, vpar, vperp, f, disterr,
         Parallel velocity bin edges, normalised by vth, shape (nbins+1,).
     vperp_edges : ndarray
         Perpendicular speed bin edges, normalised by vth, shape (nbins+1,).
-    counts_to_mask : int
-        Bins with counts <= this value are set to NaN.
 
     Returns
     -------
@@ -414,53 +412,41 @@ def _project_gyro(c_dict, vpar, vperp, f, disterr,
             'sumF'     : ndarray, shape (nbins, nbins)
     '''
 
-    f_flat        = np.nanmean(f,       axis=0).ravel()
-    disterr_flat  = np.nanmean(disterr, axis=0).ravel()
-    vpar_flat     = np.nanmean(vpar,    axis=0).ravel() / vth
-    vperp_flat    = np.nanmean(vperp,   axis=0).ravel() / vth
+    f_flat     = np.nanmean(f,     axis=0).ravel()
+    vpar_flat  = np.nanmean(vpar,  axis=0).ravel() / vth
+    vperp_flat = np.nanmean(vperp, axis=0).ravel() / vth
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        raw_counts = np.where(disterr_flat > 0, (f_flat / disterr_flat) ** 2, 0)
-    count_mask = raw_counts > counts_to_mask
-
-    # Finite mask based on velocity axes (same for all components)
-    vel_mask = np.isfinite(vpar_flat) & np.isfinite(vperp_flat) & count_mask
+    vel_mask = np.isfinite(vpar_flat) & np.isfinite(vperp_flat)
 
     vpar_flat  = vpar_flat[vel_mask]
     vperp_flat = vperp_flat[vel_mask]
     f_flat     = f_flat[vel_mask]
 
-    # Distribution and counts — computed once
     counts, _, _ = np.histogram2d(
         vpar_flat, vperp_flat, bins=[vpar_edges, vperp_edges]
     )
     sumF, _, _ = np.histogram2d(
         vpar_flat, vperp_flat, bins=[vpar_edges, vperp_edges], weights=f_flat
     )
-    f_binned = np.full_like(sumF, np.nan, dtype=float)
     f_binned = sumF / np.where(counts > 0, counts, np.nan)
 
-    # Correlation — one histogram per component
     result = {'counts': counts, 'f_binned': f_binned, 'sumF': sumF}
 
     for key, c_arr in c_dict.items():
         c_flat = c_arr.ravel()[vel_mask]
-        c_finite = np.isfinite(c_flat)
-        if not np.any(c_finite):
+        if not np.any(np.isfinite(c_flat)):
             raise ValueError(f"No finite correlation values for component '{key}'.")
-
         sumC, _, _ = np.histogram2d(
             vpar_flat, vperp_flat, bins=[vpar_edges, vperp_edges], weights=c_flat
         )
-        c_binned = np.full_like(sumC, np.nan, dtype=float)
         c_binned = sumC / np.where(counts > 0, counts, np.nan)
         result[key] = {'c_binned': c_binned, 'sumC': sumC}
 
     return result
 
 
-def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f, disterr,
-                        vth, vpar_edges, vperp1_edges, vperp2_edges, counts_to_mask):
+def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f,
+                        vth, vpar_edges, vperp1_edges, vperp2_edges):
     '''
     Projects a dict of correlation arrays and the distribution onto a 3D
     (v_par, v_perp1, v_perp2) Cartesian grid, making no gyrotropy assumption.
@@ -489,8 +475,6 @@ def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f, disterr,
         v_perp1 bin edges, normalised by vth, shape (nbins+1,). Runs -vmax to vmax.
     vperp2_edges : ndarray
         v_perp2 bin edges, normalised by vth, shape (nbins+1,). Runs -vmax to vmax.
-    counts_to_mask : int
-        Bins with counts <= this value are set to NaN.
 
     Returns
     -------
@@ -521,21 +505,14 @@ def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f, disterr,
     '''
 
     f_flat       = np.nanmean(f,       axis=0).ravel()
-    disterr_flat = np.nanmean(disterr, axis=0).ravel()
     vpar_flat    = np.nanmean(vpar,    axis=0).ravel() / vth
     vperp_1_flat = np.nanmean(vperp_1, axis=0).ravel() / vth
     vperp_2_flat = np.nanmean(vperp_2, axis=0).ravel() / vth
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        raw_counts = np.where(disterr_flat > 0, (f_flat / disterr_flat) ** 2, 0)
-    count_mask = raw_counts > counts_to_mask
-
-    # Finite mask based on velocity axes (same for all components)
     vel_mask = (
         np.isfinite(vpar_flat)    &
         np.isfinite(vperp_1_flat) &
-        np.isfinite(vperp_2_flat) &
-        count_mask
+        np.isfinite(vperp_2_flat)
     )
 
     vpar_flat    = vpar_flat[vel_mask]
@@ -545,35 +522,28 @@ def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f, disterr,
 
     sample = np.stack([vpar_flat, vperp_1_flat, vperp_2_flat], axis=1)
 
-    # Distribution and counts — computed once
     counts, _ = np.histogramdd(sample, bins=[vpar_edges, vperp1_edges, vperp2_edges])
     sumF,   _ = np.histogramdd(
         sample, bins=[vpar_edges, vperp1_edges, vperp2_edges], weights=f_flat
     )
-    f_binned = np.full_like(sumF, np.nan, dtype=float)
     f_binned = sumF / np.where(counts > 0, counts, np.nan)
 
-    # Correlation — one histogram per component
     result = {'counts': counts, 'f_binned': f_binned, 'sumF': sumF}
 
     for key, c_arr in c_dict.items():
         c_flat = c_arr.ravel()[vel_mask]
-        c_finite = np.isfinite(c_flat)
-        if not np.any(c_finite):
+        if not np.any(np.isfinite(c_flat)):
             raise ValueError(f"No finite correlation values for component '{key}'.")
-
         sumC, _ = np.histogramdd(
             sample, bins=[vpar_edges, vperp1_edges, vperp2_edges], weights=c_flat
         )
-        c_binned = np.full_like(sumC, np.nan, dtype=float)
         c_binned = sumC / np.where(counts > 0, counts, np.nan)
         result[key] = {'c_binned': c_binned, 'sumC': sumC}
 
     return result
 
-
 def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
-                     species, counts_to_mask, spacecraft_id,
+                     species, counts_to_mask,
                      vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
                      nbins, projection, ecut):
     '''
@@ -658,22 +628,8 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
 
     # --- Distribution fluctuations ---
     f = np.array([d['data'] * 1e12 for d in dist_chunk], dtype=float)
-
     if not np.any(np.isfinite(f)):
-        raise ValueError("Distribution data in chunk contains no finite values.")                         
-
-    inst         = 'des' if species == 'electron' else 'dis'
-    disterr_tvar = f'mms{spacecraft_id}_{inst}_disterr_brst'
-    disterr_data = get_data(disterr_tvar)
-    if disterr_data is None:
-        raise ValueError(f"Could not retrieve '{disterr_tvar}'.")
-    store_data('_disterr_full', data={'x': disterr_data.times, 'y': disterr_data.y})
-    tinterpol('_disterr_full', t_dist, newname='_disterr_chunk')
-    disterr_interp = get_data('_disterr_chunk')
-    if disterr_interp is None:
-        raise ValueError("Could not interpolate disterr onto chunk times.")
-    disterr = disterr_interp.y * 1e12
-    disterr = disterr.transpose(0, 1, 3, 2)  # match f axis ordering
+        raise ValueError("Distribution data in chunk contains no finite values.")
     mean_f = np.nanmean(f, axis=0)
     del_f  = f - mean_f
 
@@ -698,13 +654,13 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
     # --- Project ---
     if projection == 'gyro':
         return _project_gyro(
-            c_dict, vpar, vperp, f, disterr,
-            vth, vpar_edges, vperp_edges, counts_to_mask
+            c_dict, vpar, vperp, f,
+            vth, vpar_edges, vperp_edges
         )
     elif projection == 'cartesian':
         return _project_cartesian(
-            c_dict, vpar, vperp_1, vperp_2, f, disterr,
-            vth, vpar_edges, vperp1_edges, vperp2_edges, counts_to_mask
+            c_dict, vpar, vperp_1, vperp_2, f,
+            vth, vpar_edges, vperp1_edges, vperp2_edges
         )
     else:
         raise ValueError(f"projection must be 'gyro' or 'cartesian', got '{projection}'")
@@ -888,13 +844,13 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         if is_interleaved:
             r0 = _correlate_chunk(
                 subset[0::2], e_filt_y, e_filt_times, eigen, vth, ve0,
-                species, counts_to_mask, spacecraft_id,
+                species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
                 _nbins, projection, ecut
             )
             r1 = _correlate_chunk(
                 subset[1::2], e_filt_y, e_filt_times, eigen, vth, ve0,
-                species, counts_to_mask, spacecraft_id,
+                species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
                 _nbins, projection, ecut
             )
@@ -915,7 +871,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         else:
             return _correlate_chunk(
                 subset, e_filt_y, e_filt_times, eigen, vth, ve0,
-                species, counts_to_mask, spacecraft_id,
+                species, counts_to_mask,
                 vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
                 _nbins, projection, ecut
             )
