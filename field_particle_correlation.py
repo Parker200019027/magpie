@@ -820,7 +820,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     if vpar_edges is None:
         vpar_edges = np.linspace(-vmax, vmax, _nbins + 1)
     if vperp_edges is None:
-        vperp_edges = np.linspace(0, vmax, _nbins + 1)
+        vperp_edges = np.linspace(0, vmax, (_nbins//2) + 1)
     if vperp1_edges is None:
         vperp1_edges = np.linspace(-vmax, vmax, _nbins + 1)
     if vperp2_edges is None:
