@@ -91,6 +91,10 @@ def lorentz(e_field, b_field, bulkv, spintone=None):
     Transforms the electric field from the spacecraft frame to the plasma frame
     using the Lorentz transformation: E_plasma = E_sc + (v x B).
 
+    The E field is first smoothed (boxcar averaged) down to the B field cadence
+    before the rotation, so that E and B share a common time axis at the FGM
+    resolution. No interpolation of B is required.
+
     Parameters
     ----------
     e_field : str
@@ -107,7 +111,7 @@ def lorentz(e_field, b_field, bulkv, spintone=None):
     smooth_name : str
         Tplot variable name of the smoothed Lorentz-transformed E field.
     b_xyz : ndarray
-        Interpolated magnetic field time series, shape (N, 3), in nT.
+        Native-cadence magnetic field time series, shape (N, 3), in nT.
     v_ms_avg : ndarray
         Mean bulk velocity vector, shape (3,), in m/s.
 
@@ -144,11 +148,10 @@ def lorentz(e_field, b_field, bulkv, spintone=None):
     if b_sc.y.ndim != 2 or b_sc.y.shape[1] < 3:
         raise ValueError(f"'{b_field}' must be 2D with >=3 components, got shape {b_sc.y.shape}")
 
-    tinterpol(b_field, e_sc.times, newname='b_interp')
-    b_interp_data = get_data('b_interp')
-    if b_interp_data is None:
-        raise ValueError("Interpolation of B field failed.")
+    if not np.all(np.isfinite(e_sc.y)):
+        raise ValueError(f"'{e_field}' contains NaN or Inf values.")
 
+    # --- Spintone correction (operates on original bulkv cadence) ---
     if spintone is not None:
         spintone_data = get_data(spintone)
         if spintone_data is None:
@@ -166,20 +169,29 @@ def lorentz(e_field, b_field, bulkv, spintone=None):
     if not np.all(np.isfinite(v_ms_avg)):
         raise ValueError("Averaged bulk velocity contains NaN or Inf values.")
 
-    b_xyz = b_interp_data.y[:, 0:3]
-    if not np.all(np.isfinite(b_xyz)):
-        raise ValueError("Interpolated B field contains NaN or Inf values.")
-    if not np.all(np.isfinite(e_sc.y)):
-        raise ValueError(f"'{e_field}' contains NaN or Inf values.")
+    # --- Smooth E field down to B cadence (no B interpolation needed) ---
+    smooth_times, smooth_y = boxcar_averager(e_sc.times, e_sc.y, b_sc.times)
+    smooth_name = 'e_field_smooth'
+    store_data(smooth_name, data={'x': b_sc.times, 'y': smooth_y})
+    e_smooth = get_data(smooth_name)
+    if e_smooth is None:
+        raise ValueError("Failed to store 'e_field_smooth'.")
 
-    e_lorentz     = (e_sc.y * 1e-3) + np.cross(v_ms_avg, b_xyz * 1e-9)
+    # --- Use B at its native cadence --- no tinterpol required ---
+    b_xyz = b_sc.y[:, 0:3]
+    if not np.all(np.isfinite(b_xyz)):
+        raise ValueError("B field contains NaN or Inf values.")
+
+    # --- Lorentz rotation: E and B now share the B cadence time axis ---
+    e_lorentz     = (e_smooth.y * 1e-3) + np.cross(v_ms_avg, b_xyz * 1e-9)
     e_lorentz_mvm = e_lorentz * 1e3
 
-    store_data('e_field_transformed', data={'x': e_sc.times, 'y': e_lorentz_mvm})
+    store_data('e_field_transformed', data={'x': b_sc.times, 'y': e_lorentz_mvm})
     transformed_data = get_data('e_field_transformed')
     if transformed_data is None:
         raise ValueError("Failed to store 'e_field_transformed'.")
 
+    # --- Smooth transformed E down to DIS/DES cadence ---
     smooth_times, smooth_y = boxcar_averager(
         transformed_data.times, transformed_data.y, bulkv_data.times
     )
