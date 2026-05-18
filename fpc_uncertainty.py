@@ -1,3 +1,6 @@
+import numpy as np
+from pyspedas import get_data, store_data, tinterpol, subtract
+
 def fpc_uncertainty(dist,
                     eigen,
                     vth,
