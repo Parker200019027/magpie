@@ -1,363 +1,363 @@
-import numpy as np
-from pyspedas import get_data, tinterpol, store_data
-
-def fpc_uncertainty(dist, 
-                    eigen, 
+def fpc_uncertainty(dist,
+                    eigen,
                     vth,
                     ve0,
-                    edges, 
-                    spacecraft_id=1, 
+                    edges,
+                    spacecraft_id=1,
                     species='electron',
+                    projection='gyro',
                     counts_to_mask=0,
-                    ecut=None):
+                    ecut=None,
+                    result=None,
+                    direction='parallel'):
+    '''
+    Propagates Poisson counting uncertainties through the FPC pipeline
+    following Afshari et al. Table B1 and Appendix B
+    https://doi.org/10.1029/2021JA029578.
 
-  ''' 
-  Propagates Poisson counting uncertainties through the FPC pipeline
-  following Afshari et al. Table B1 and Appendix B https://doi.org/10.1029/2021JA029578.
+    *Temporary Correct Version*
+    
+    The electric field is treated as exact (no systematic uncertainty),
+    consistent with Afshari et al. Appendix B. All uncertainty propagates
+    from the Poisson counting statistics reported in the FPI level 2
+    disterr variable.
 
-  The electric field is treated as a constant consistent with Afshari et al. All uncertainty
-  propagates from the Poisson counting statistics reported in the FPI level 2 disterr variable.
+    Two projections are supported, matching field_particle_correlation:
 
-  Parameters
-  ----------
-  dist : list of dict
-    Particle distribution dicts, each with keys:
-    'start_time', 'end_time', 'energy', 'theta', 'phi', 'data'.
-  eigen : list of ndarray
-    FAC basis vectors [e_par, e_perp1, e_perp2], each shape (3,).
-    Must be the same eigen used in the FPC computation.
-  vth : float
-    Thermal velocity in m/s. Must be the same vth used in the FPC
-    computation
-  ve0 : list of int
-    Mean bulk velocity values in m/s for x,y,z.
-  edges : dict
-    Velocity grid edges from field_particle_correlation, containing
-    keys 'vpar' and 'vperp'.
-  spacecraft_id : int, optional
-    MMS spacecraft ID (1-4). Default is 1.
-  species : str, optional
-    Particle species, 'ion' or 'electron'. Default is 'electron'
-  counts_to_mask : int, optional
-    Minimum bin count threshold. Default is 0.
+    - 'gyro'      : 2D (v_par, |v_perp|) grid. sigma_5 follows Afshari
+                    et al. Table B1 exactly, with cylindrical 2pi*v_perp
+                    weighting. Returns sigma_perp as the uncertainty on
+                    the reduced perpendicular line C(v_perp).
+    - 'cartesian' : 3D (v_par, v_perp1, v_perp2) grid. sigma_5 is the
+                    cartesian analogue, integrating sigma_4 in quadrature
+                    over the appropriate axes for each component.
 
-  Returns
-  -------
-  uncertainty : dict
-    Uncertainty dicts, with keys sigma(1-7) containing all uncertainties
-    outlined in Table B1 of Afshari et al.
+    The signal_threshold parameter controls which bins are included when
+    integrating sigma_4 into sigma_5 and sigma_perp. Velocity-space bins
+    at the edges of the distribution are often sparsely sampled — only
+    a handful of particles land there by chance. Because sigma_4 is
+    proportional to 1/counts, these bins have large individual
+    uncertainties but contribute negligible signal. When sigma_4 is
+    integrated in quadrature across velocity space, these outlier bins
+    can dominate the sum and produce an unrealistically large integrated
+    uncertainty that bears no relation to the actual signal quality.
 
-  Raises
-  ------
-  ValueError
-     If required tplot variables cannot be retreived, disterr is
-    unavailable, or the pre-processed E field has not been stored
+    The threshold works by masking any sigma_4 bin where the corresponding
+    c_binned value is less than signal_threshold * max(|c_binned|). Only
+    bins that contribute meaningfully to the signal are then included in
+    the quadrature sum. The raw sigma_4 array is always returned unmasked
+    so per-bin information is preserved. Set signal_threshold=0 to disable.
 
-  Notes
-  -----
-  Requires field_particle_correlation to have been run first so that
-  'e_field_transformed_smooth' exists in the tplot store.
-  Bin sizes follow Afshari et al. : dv_perp = dv_par = 0.1 v_th,e/i
-  '''
+    Parameters
+    ----------
+    dist : list of dict
+        Particle distribution dicts, each with keys:
+        'start_time', 'end_time', 'energy', 'theta', 'phi', 'data'.
+    eigen : list of ndarray
+        FAC basis vectors [e_par, e_perp1, e_perp2], each shape (3,).
+        Must be the same eigen used in the FPC computation.
+    vth : float
+        Thermal velocity in m/s. Must be the same vth used in the FPC
+        computation.
+    ve0 : array-like
+        Mean bulk velocity in m/s, shape (3,).
+    edges : dict
+        Velocity grid edges from field_particle_correlation. Must contain
+        'vpar'. Gyro mode also requires 'vperp'. Cartesian mode also
+        requires 'vperp1' and 'vperp2'.
+    spacecraft_id : int, optional
+        MMS spacecraft ID (1-4). Default is 1.
+    species : str, optional
+        'ion' or 'electron'. Default is 'electron'.
+    projection : str, optional
+        'gyro' or 'cartesian'. Must match the projection used in
+        field_particle_correlation. Default is 'gyro'.
+    counts_to_mask : int, optional
+        Minimum bin count threshold below which sigma_4 is set to NaN.
+        Default is 0.
+    signal_threshold : float, optional
+        Fractional threshold relative to the peak signal. Bins in sigma_4
+        where the corresponding c_binned value is below
+        signal_threshold * max(|c_binned|) are excluded from the
+        quadrature integration into sigma_5 and sigma_perp. Default 1e-3.
+        Set to 0 to disable.
+    ecut : float or None, optional
+        Optional photoelectron energy cut in eV. Default is None.
 
-  if species == 'electron':
-    q = -1.60217663e-19
-    mass = 9.10938371e-31
-    disterr_tvar = f'mms{spacecraft_id}_des_disterr_brst'
-  else: 
-    q = 1.60217663e-19
-    mass = 1.67262192e-27
-    disterr_tvar = f'mms{spacecraft_id}_dis_disterr_brst'
+    Returns
+    -------
+    uncertainty : dict
+        Keys:
+            'sigma3' : dict with keys 'par', 'perp1', 'perp2'
+                       Shape (N_t, N_energy, N_theta, N_phi).
+            'sigma4' : dict with keys 'par', 'perp1', 'perp2'
+                       Gyro:      shape (nbins_par, nbins_perp)
+                       Cartesian: shape (nbins_par, nbins_perp1, nbins_perp2)
+                       Raw binned uncertainty, unmasked.
+            'sigma5' : dict with keys 'par', 'perp1', 'perp2'
+                       Shape (nbins,). Computed after signal threshold masking.
+            'sigma6' : dict, same shape as sigma5.
+            'sigma7' : dict, same shape as sigma5.
+            'sigmaf' : dict with keys 'par', 'perp1', 'perp2' — scalars.
+            'sigma_perp' : dict with keys 'perp1', 'perp2' [gyro only]
+                       Uncertainty on the reduced perpendicular line C(v_perp).
+                       None in cartesian mode.
 
-  vpar_edges    = edges['vpar']
-  vperp_edges   = edges['vperp']
-  vperp_1_edges = edges['vperp1']
-  vperp_2_edges = edges['vperp2']
-                      
-  nbins_par   = len(vpar_edges) - 1
-  nbins_perp  = len(vperp_edges) - 1
-  nbins_perp1 = len(vperp_1_edges) - 1
-  nbins_perp2 = len(vperp_2_edges) - 1
+    Raises
+    ------
+    ValueError
+        If required tplot variables cannot be retrieved, disterr is
+        unavailable, the pre-processed E field has not been stored, or
+        projection is invalid.
 
-  vpar_centres    =  0.5 * (vpar_edges[:-1]  + vpar_edges[1:])
-  vperp_centres   = 0.5 * (vperp_edges[:-1] + vperp_edges[1:])
-  vperp_1_centres = 0.5 * (vperp_1_edges[:-1] + vperp_1_edges[1:])
-  vperp_2_centres = 0.5 * (vperp_2_edges[:-1] + vperp_2_edges[1:])
-                      
-  dvpar       = (vpar_edges[1]  - vpar_edges[0])  * vth
-  dvperp      = (vperp_edges[1] - vperp_edges[0]) * vth
-  dvperp1     = (vperp_1_edges[1] - vperp_1_edges[0]) * vth
-  dvperp2     = (vperp_2_edges[1] - vperp_2_edges[0]) * vth
-                      
-  vpar_phys     = vpar_centres  * vth
-  vperp_phys    = vperp_centres * vth
-  vperp_1_phys  = vperp_1_centres * vth
-  vperp_2_phys  = vperp_2_centres * vth
-                      
-  # ================================================================
-  # LOAD DISTERR - sigma = f / sqrt(N), provided directly by FPI L2
-  # ================================================================
+    Notes
+    -----
+    Requires field_particle_correlation to have been run first so that
+    'e_field_transformed_smooth' exists in the tplot store.
+    Ion cadence uses dt=0.15s for n_d; electron cadence uses dt=0.03s.
+    '''
 
-  disterr_data = get_data(disterr_tvar)
-  if disterr_data is None:
-    raise ValueError(
-      f"Could not retrieve '{disterr_tvar}'. "
-      "Ensure FPI burst data has been loaded"
-    )
-
-  # ================================================================
-  # LOAD E FIELD - treated as a constant, used only as a multiplier
-  # Retrived from tplot store set by field_particle_correlation
-  # ================================================================
-
-  e_data = get_data('e_field_transformed_smooth')
-  if e_data is None:
-    raise ValueError(
-      "Could not retrieve 'e_field_transformed_smooth'. "
-      "Ensure field_particle_correlation has been run first"
-    )
-
-  # ================================================================
-  # DISTRIBUTION TIMES AND VELOCITY GRID
-  # ================================================================
-
-  t_dist = np.array(
-                [(d['start_time'] + d['end_time']) * 0.5 for d in dist], dtype=float
-  )
-  n_t = len(t_dist)
-
-  energy = np.array([d['energy'] for d in dist], dtype=float)
-  theta  = np.deg2rad(np.array([dist[0]['theta']], dtype=float))
-  phi    = np.deg2rad(np.array([dist[0]['phi']],   dtype=float))
-
-  # --- Optional photoelectron cut ---
-  if ecut is not None:
-    energy = np.where(energy > ecut, energy, np.nan)
-
-  energy = np.where(energy > 0, energy, 1e-12)
-
-  v = np.sqrt(2 * energy * np.abs(q) / mass)
-
-  vx    = v * np.cos(theta[0]) * np.cos(phi[0]) - ve0[0]
-  vy    = v * np.cos(theta[0]) * np.sin(phi[0]) - ve0[1]#
-  vz    = v * np.sin(theta[0]) - ve0[2]
-  vvec  = np.stack([vx, vy, vz], axis=-1)
-
-  vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
-  vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
-  vperp_2 = np.tensordot(vvec, eigen[2], axes=([-1], [0]))
-  vperp   = np.sqrt(vperp_1**2 + vperp_2**2)
-
-  vpar_mean    = np.nanmean(vpar, axis=0)    # (N_energy, N_theta, N_phi)
-  vperp_1_mean = np.nanmean(vperp_1, axis=0)
-  vperp_2_mean = np.nanmean(vperp_2, axis=0)
-
-  vpar_n  = vpar_mean.ravel() / vth
-  vperp_n = np.nanmean(vperp, axis=0).ravel() / vth
-
-  # ================================================================
-  # INTERPOLATE DISTERR AND E FIELD ONTO DISTRIBUTION TIMES
-  # ================================================================  
-
-  store_data('_disterr_full', data={'x': disterr_data.times, 'y': disterr_data.y})
-  tinterpol('_disterr_full', t_dist, newname='_disterr_interp')
-  disterr_interp = get_data('_disterr_interp')
-  if disterr_interp is None:
-    raise ValueError("Could not interpolate disterr onto distribution times.")
-
-  store_data('_e_unc_full', data={'x': e_data.times, 'y': e_data.y})
-  tinterpol('_e_unc_full', t_dist, newname='_e_unc_interp')
-  e_interp = get_data('_e_unc_interp')
-  if e_interp is None:
-    raise ValueError("Could not interpolate E field onto distribution times.")
-
-  # Project E field onto FAC - shape (N_t,)
-  epar = np.dot(e_interp.y * 1e-3, eigen[0])
-  eperp_1 = np.dot(e_interp.y * 1e-3, eigen[1])                    
-  eperp_2 = np.dot(e_interp.y * 1e-3, eigen[2])
-
-  # ================================================================
-  # sigma: original data uncertainty from disterr
-  # Units : s^3/cm^-6 -> s^3/m^-6
-  # Shape : (N_t, N_energy, N_theta, N_phi)
-  # ================================================================  
-
-  sigma = disterr_interp.y * 1e12
-  sigma = sigma.transpose(0, 1, 3, 2) # reorder to (N_t, N_energy, N_theta, N_phi)
-
-  
-  # ================================================================
-  # sigma_1: background distribution uncertainty
-  # sigma' = (1/n) * sqrt(sum_j sigma_j^2) over time axis
-  # Shape : (N_energy, N_theta, N_phi)
-  # ================================================================    
-
-  sigma_1 = (1 / n_t) * np.sqrt(np.nansum(sigma**2, axis=0))
-
-  # ================================================================
-  # sigma_2: fluctuation uncertainty
-  # sigma'' = sqrt(sigma'^2 + sigma^2)
-  # Shape : (N_t, N_energy, N_theta, N_phi)
-  # ================================================================
-
-  sigma_2 = np.sqrt(sigma_1[np.newaxis, :]**2 + sigma**2)
-
-  # ================================================================
-  # sigma_3: correlation uncertainty at each time step, E field
-  #          treated as exact.
-  # sigma''' = |q * v * sigma'' * E|
-  # Shape : (N_t, N_energy, N_theta, N_phi)
-  # ================================================================  
-
-  sigma_3_par = np.abs(
-    q * vpar_mean[np.newaxis, :]
-    * epar[:, np.newaxis, np.newaxis, np.newaxis]
-    * sigma_2
-  )
-
-  sigma_3_perp_1 = np.abs(
-    q * vperp_1_mean[np.newaxis, :]
-    * eperp_1[:, np.newaxis, np.newaxis, np.newaxis]
-    * sigma_2
-  )
-
-  sigma_3_perp_2 = np.abs(
-    q * vperp_2_mean[np.newaxis, :]
-    * eperp_2[:, np.newaxis, np.newaxis, np.newaxis]
-    * sigma_2
-  )
-
-  sigma_3 = {
-    'par'   : sigma_3_par, 
-    'perp1' : sigma_3_perp_1, 
-    'perp2' : sigma_3_perp_2
-  }
-
-  # ================================================================
-  # sigma_4: binned correlation uncertainty
-  # sigma'''' = (1/n) * sqrt(sum_j sigma'''^2) per velocity bin
-  # Shape : (N_t, N_energy, N_theta, N_phi)
-  # ================================================================  
-
-  vpar_flat    = vpar_n.ravel()
-  vperp_1_flat = np.nanmean(vperp_1, axis=0).ravel() / vth
-  vperp_2_flat = np.nanmean(vperp_2, axis=0).ravel() / vth
-
-  vel_mask = np.isfinite(vpar_flat) & np.isfinite(vperp_1_flat) & np.isfinite(vperp_2_flat)
-
-  vpar_flat = vpar_flat[vel_mask]
-  vperp_1_flat = vperp_1_flat[vel_mask]
-  vperp_2_flat = vperp_2_flat[vel_mask]
-
-  sample = np.stack([vpar_flat, vperp_1_flat, vperp_2_flat], axis=1)
-
-  sumS2 = {k: np.zeros((nbins_par, nbins_perp1, nbins_perp2)) for k in ('par', 'perp1', 'perp2')}
-  counts, _ = np.histogramdd(sample, bins=[vpar_edges, vperp_1_edges, vperp_2_edges])
-
-  for t_idx in range(n_t):
-      for key in ('par', 'perp1', 'perp2'):
-        s_t    = sigma_3[key].reshape(n_t, -1)[t_idx][vel_mask]
-        finite = np.isfinite(s_t)
-        if not np.any(finite):
-          continue
-        s_t_masked = np.where(finite, s_t, 0.0)
-        s2, _ = np.histogramdd(
-          sample, bins=[vpar_edges, vperp_1_edges, vperp_2_edges],
-          weights=s_t_masked**2
+    if projection not in ('gyro', 'cartesian'):
+        raise ValueError(
+            f"projection must be 'gyro' or 'cartesian', got '{projection}'"
         )
-        sumS2[key] += s2
-  
-  mask = counts > counts_to_mask
-  sigma_4 = {}
-  for key in ('par', 'perp1', 'perp2'):
-        s4 = np.full((nbins_par, nbins_perp1, nbins_perp2), np.nan)
-        s4[mask] = (1 / counts[mask]) * np.sqrt(sumS2[key][mask])
-        sigma_4[key] = s4
 
-  # ================================================================
-  # sigma_5: reduced correlation uncertainty
-  # sigma''''' = dv * sqrt(sum_j,k sigma''''^2) 
-  # Shape : (n_bins,)
-  # ================================================================  
+    if species == 'electron':
+        q            = -1.60217663e-19
+        mass         =  9.10938371e-31
+        disterr_tvar = f'mms{spacecraft_id}_des_disterr_brst'
+        dt_dist      = 0.03
+    else:
+        q            =  1.60217663e-19
+        mass         =  1.67262192e-27
+        disterr_tvar = f'mms{spacecraft_id}_dis_disterr_brst'
+        dt_dist      = 0.15
 
-  sigma_5_par   = dvperp1 * dvperp2 * np.sqrt(np.nansum(sigma_4['par']**2, axis=(1,2)))
-  sigma_5_perp1 = dvpar   * dvperp2 * np.sqrt(np.nansum(sigma_4['perp1']**2, axis=(0, 2)))
-  sigma_5_perp2 = dvpar   * dvperp1 * np.sqrt(np.nansum(sigma_4['perp2']**2, axis=(0, 1)))
+    # =========================================================================
+    # VELOCITY GRID
+    # =========================================================================
 
-  sigma_5 = {
-         'par'   : sigma_5_par,
-         'perp1' : sigma_5_perp1,
-         'perp2' : sigma_5_perp2
-         }
+    vpar_edges   = edges['vpar']
+    nbins_par    = len(vpar_edges) - 1
+    vpar_centres = 0.5 * (vpar_edges[:-1] + vpar_edges[1:])
+    dvpar        = (vpar_edges[1] - vpar_edges[0])
+    vpar_phys    = vpar_centres * vth
 
-  # ================================================================
-  # sigma_6: phase space transform uncertainty
-  # sigma'''''' = (|v| / (2 * dv)) * sigma'''''
-  # Shape : (n_bins,)
-  # ================================================================ 
+    if projection == 'gyro':
+        vperp_edges   = edges['vperp']
+        nbins_perp    = len(vperp_edges) - 1
+        vperp_centres = 0.5 * (vperp_edges[:-1] + vperp_edges[1:])
+        dvperp        = (vperp_edges[1] - vperp_edges[0])
+        vperp_phys    = vperp_centres * vth
+    else:
+        vperp1_edges   = edges['vperp1']
+        vperp2_edges   = edges['vperp2']
+        nbins_perp1    = len(vperp1_edges) - 1
+        nbins_perp2    = len(vperp2_edges) - 1
+        vperp1_centres = 0.5 * (vperp1_edges[:-1] + vperp1_edges[1:])
+        vperp2_centres = 0.5 * (vperp2_edges[:-1] + vperp2_edges[1:])
+        dvperp1        = (vperp1_edges[1] - vperp1_edges[0])
+        dvperp2        = (vperp2_edges[1] - vperp2_edges[0])
+        vperp1_phys    = vperp1_centres * vth
+        vperp2_phys    = vperp2_centres * vth
 
-  sigma_6_par   = (np.abs(vpar_phys) / (2 * dvpar)) * sigma_5['par']
-  sigma_6_perp1 = (np.abs(vperp_1_phys) / (2 * dvperp1)) * sigma_5['perp1']
-  sigma_6_perp2 = (np.abs(vperp_2_phys) / (2 * dvperp2)) * sigma_5['perp2']
+    # =========================================================================
+    # LOAD DISTERR AND E FIELD
+    # =========================================================================
 
-  sigma_6 = {
-         'par'   : sigma_6_par,
-         'perp1' : sigma_6_perp1,
-         'perp2' : sigma_6_perp2
-         }
+    disterr_data = get_data(disterr_tvar)
+    if disterr_data is None:
+        raise ValueError(
+            f"Could not retrieve '{disterr_tvar}'. "
+            "Ensure FPI burst data has been loaded."
+        )
 
-  # ================================================================
-  # sigma_7: time averaged correlation uncertainty
-  # sigma''''''' = (1/n) * sigma'''''', n = tau / 0.03
-  # Shape : (n_bins,)
-  # ================================================================ 
+    e_data = get_data('e_field_transformed_smooth')
+    if e_data is None:
+        raise ValueError(
+            "Could not retrieve 'e_field_transformed_smooth'. "
+            "Ensure field_particle_correlation has been run first."
+        )
 
-  tau = t_dist[-1] - t_dist[0]
-  n_d = max(int(tau / 0.03), 1)
+    # =========================================================================
+    # DISTRIBUTION TIMES AND VELOCITY PROJECTION
+    # =========================================================================
 
-  sigma_7_par   = (1 / n_d) * sigma_6['par']
-  sigma_7_perp1 = (1 / n_d) * sigma_6['perp1']
-  sigma_7_perp2 = (1 / n_d) * sigma_6['perp2']       
+    t_dist = np.array(
+        [(d['start_time'] + d['end_time']) * 0.5 for d in dist], dtype=float
+    )
+    n_t = len(t_dist)
 
-  sigma_7 = {
-         'par'   : sigma_7_par,
-         'perp1' : sigma_7_perp1,
-         'perp2' : sigma_7_perp2
-         }
+    energy = np.array([d['energy'] for d in dist], dtype=float)
+    theta  = np.deg2rad(np.array([dist[0]['theta']], dtype=float))
+    phi    = np.deg2rad(np.array([dist[0]['phi']],   dtype=float))
 
-  # ================================================================
-  # sigma_f: final energy density transfer rate uncertainty
-  # sigma_f = dv * sqrt(sum_j sigma'''''''^2)
-  # Sum over v from -3 to +3 vth
-  # ================================================================       
+    if ecut is not None:
+        energy = np.where(energy > ecut, energy, np.nan)
+    energy = np.where(energy > 0, energy, 1e-12)
 
-  within_3vth_vpar = np.abs(vpar_centres <= 3.0)
-  sigma_f_par = dvpar * np.sqrt(np.nansum(sigma_7['par'][within_3vth_vpar]**2))
+    v    = np.sqrt(2 * energy * np.abs(q) / mass)
+    vx   = v * np.cos(theta[0]) * np.cos(phi[0]) - ve0[0]
+    vy   = v * np.cos(theta[0]) * np.sin(phi[0]) - ve0[1]
+    vz   = v * np.sin(theta[0]) - ve0[2]
+    vvec = np.stack([vx, vy, vz], axis=-1)
 
-  within_3vth_vperp1 = np.abs(vperp_1_centres <= 3.0)
-  sigma_f_perp1 = dvperp1 * np.sqrt(np.nansum(sigma_7['perp1'][within_3vth_vperp1]**2))
+    vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))
+    vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
+    vperp_2 = np.tensordot(vvec, eigen[2], axes=([-1], [0]))
+    vperp   = np.sqrt(vperp_1**2 + vperp_2**2)
 
-  within_3vth_vperp2 = np.abs(vperp_2_centres <= 3.0)
-  sigma_f_perp2 = dvperp2 * np.sqrt(np.nansum(sigma_7['perp2'][within_3vth_vperp2]**2))
+    vpar_mean    = np.nanmean(vpar,    axis=0)
+    vperp_1_mean = np.nanmean(vperp_1, axis=0)
+    vperp_2_mean = np.nanmean(vperp_2, axis=0)
 
-  sigma_f = {
-         'par'   : sigma_f_par,
-         'perp1' : sigma_f_perp1,
-         'perp2' : sigma_f_perp2
-         }
-          
+    vpar_n   = vpar[0].ravel()   / vth
+    vperp_n  = vperp[0].ravel() / vth
+    vperp1_n = np.nanmean(vperp_1, axis=0).ravel() / vth
+    vperp2_n = np.nanmean(vperp_2, axis=0).ravel() / vth
 
-  # ================================================================
-  # BUILDING RETURN DICTIONARY
-  # ================================================================  
-  
-  uncertainty = {
-          'sigma3' : sigma_3,
-          'sigma4' : sigma_4,
-          'sigma5' : sigma_5,
-          'sigma6' : sigma_6,
-          'sigma7' : sigma_7,
-          'sigmaf' : sigma_f
-         }
+    # =========================================================================
+    # INTERPOLATE DISTERR AND E FIELD
+    # =========================================================================
 
-  return uncertainty
+    store_data('_disterr_full', data={'x': disterr_data.times, 'y': disterr_data.y})
+    tinterpol('_disterr_full', t_dist, newname='_disterr_interp')
+    disterr_interp = get_data('_disterr_interp')
+    if disterr_interp is None:
+        raise ValueError("Could not interpolate disterr onto distribution times.")
+
+    sample_rate = 1 / np.median(np.diff(get_data(f'mms{spacecraft_id}_d{species[0]}s_bulkv_gse_brst').times))
+
+    sos = scipy.signal.butter(5, 1, 'highpass', fs=sample_rate, output='sos')
+    filtered_data = scipy.signal.sosfiltfilt(sos, e_data.y, axis=0)
+    
+    store_data('_e_unc_full', data={'x': e_data.times, 'y': filtered_data})
+    tinterpol('_e_unc_full', t_dist, newname='_e_unc_interp')
+    e_interp = get_data('_e_unc_interp')
+    if e_interp is None:
+        raise ValueError("Could not interpolate E field onto distribution times.")
+
+    epar    = np.dot(e_interp.y * 1e-3, eigen[0])
+    eperp_1 = np.dot(e_interp.y * 1e-3, eigen[1])
+    eperp_2 = np.dot(e_interp.y * 1e-3, eigen[2])
+
+    # =========================================================================
+    # STEP 1 — sigma: disterr in SI units
+    # Shape: (N_t, N_energy, N_theta, N_phi)
+    # =========================================================================
+
+    sigma = disterr_interp.y * 1e12
+    sigma = sigma.transpose(0, 1, 3, 2)
+
+    f_data = np.array([d['data'] * 1e12 for d in dist], dtype=float)
+    sigma_safe = np.where(sigma > 0, sigma, np.nan)
+    counts_raw = (f_data / sigma_safe) ** 2
+    sigma = np.where(counts_raw >= counts_to_mask, sigma, np.nan)
+
+    sigma1 = 1/n_t * np.sqrt(np.nansum(sigma**2, axis=0))
+
+    sigma2 = np.sqrt(sigma1**2 + sigma**2)
+
+    sigma3_par = q * vpar * sigma2 * epar[:, np.newaxis, np.newaxis, np.newaxis]
+    sigma3_perp1 = q * vperp_1 * sigma2 * eperp_1[:, np.newaxis, np.newaxis, np.newaxis]
+    sigma3_perp2 = q * vperp_2 * sigma2 * eperp_2[:, np.newaxis, np.newaxis, np.newaxis]
+
+    if direction == 'parallel':
+
+        sigma3 = sigma3_par
+
+        counts, _, _ = np.histogram2d(
+            vpar_n, vperp_n, bins=[vpar_edges, vperp_edges]
+        )
+    
+        sigma_n = np.nanmean(sigma3, axis=0).ravel()
+        
+        sumS, _, _ = np.histogram2d(
+            vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=sigma_n
+        )
+    
+        ''' 
+        sigma4 = np.full_like(sumS, np.nan, dtype=float)
+        
+        mask = counts > counts_to_mask
+    
+        sigma4[mask] = np.sqrt(np.nansum(sumS[mask]**2)) / counts[mask]
+        '''
+    
+        sigma4 = np.full((nbins_par, nbins_perp), np.nan)
+        sumS2 = np.zeros((nbins_par, nbins_perp))
+        counts = np.zeros((nbins_par, nbins_perp))
+    
+        sigma6_sum2 = np.zeros(nbins_par)
+        sigma4_sum2 = np.zeros((nbins_par, nbins_perp))
+        counts_total = np.zeros((nbins_par, nbins_perp))
+        
+        for i in range(n_t):
+            sigma4_i = np.full((nbins_par, nbins_perp), np.nan)
+            
+            sigma_n_i = sigma3[i].ravel()
+            s, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges], weights=sigma_n_i)
+            c, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges])
+    
+            if i==0:
+                print(c.max())
+            
+            sigma4_i = s / c
+    
+            sigma5_i = 2 * np.pi * dvperp * vth * np.sqrt(np.nansum((vperp_centres * vth * sigma4_i)**2, axis=1))
+    
+            sigma6_i = np.abs(vpar_centres / (2 * dvpar)) * sigma5_i
+            
+            sigma6_sum2 += np.where(np.isnan(sigma6_i), 0, sigma6_i**2)
+            sigma4_sum2 += np.where(np.isnan(sigma4_i), 0, sigma4_i**2)
+            counts_total += c
+        
+        sigma7 = (1 / n_t) * np.sqrt(sigma6_sum2)
+        
+        # Time-averaged sigma4 and sigma5 for inspection
+        sigma4 = np.full((nbins_par, nbins_perp), np.nan)
+        sigma4 = (1 / (n_t * 0.03)) * np.sqrt(sigma4_sum2)
+        
+        sigma5 = 2 * np.pi * dvperp * vth * np.sqrt(np.nansum((vperp_centres * vth * sigma4)**2, axis=1))
+        sigma6 = np.abs(vpar_centres / (2 * dvpar)) * sigma5
+    
+        return sigma7
+
+    elif direction == 'perpendicular':
+
+        sigma4_sum2_perp1  = np.zeros((nbins_par, nbins_perp))
+        sigma4_sum2_perp2  = np.zeros((nbins_par, nbins_perp))
+        sigma6_sum2        = np.zeros(nbins_perp)
+        counts_total       = np.zeros((nbins_par, nbins_perp))
+    
+        for i in range(n_t):
+            s1, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges],
+                                       weights=sigma3_perp1[i].ravel())
+            s2, _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges],
+                                       weights=sigma3_perp2[i].ravel())
+            c,  _, _ = np.histogram2d(vpar_n, vperp_n, bins=[vpar_edges, vperp_edges])
+    
+            mask_i    = c > 0
+            sigma4_i_perp1 = np.where(mask_i, s1 / c, np.nan)
+            sigma4_i_perp2 = np.where(mask_i, s2 / c, np.nan)
+    
+            # sigma5: integrate each component over vpar — shape (nbins_perp,)
+            sigma5_i_perp1 = dvpar * vth * np.sqrt(np.nansum(sigma4_i_perp1**2, axis=0))
+            sigma5_i_perp2 = dvpar * vth * np.sqrt(np.nansum(sigma4_i_perp2**2, axis=0))
+    
+            # sigma6: apply Eq. 6 to each component then sum in quadrature
+            dc_dvperp_1  = np.gradient(sigma5_i_perp1, vperp_phys)
+            dc_dvperp_2  = np.gradient(sigma5_i_perp2, vperp_phys)
+            sigma6_i_perp1 = np.abs(-0.5 * vperp_phys * dc_dvperp_1 + sigma5_i_perp1 / 2)
+            sigma6_i_perp2 = np.abs(-0.5 * vperp_phys * dc_dvperp_2 + sigma5_i_perp2 / 2)
+    
+            sigma6_i = np.sqrt(sigma6_i_perp1**2 + sigma6_i_perp2**2)
+    
+            sigma6_sum2  += np.where(np.isnan(sigma6_i), 0, sigma6_i**2)
+            sigma4_sum2_perp1 += np.where(np.isnan(sigma4_i_perp1), 0, sigma4_i_perp1**2)
+            sigma4_sum2_perp2 += np.where(np.isnan(sigma4_i_perp2), 0, sigma4_i_perp2**2)
+            counts_total += c
+    
+        sigma7 = (1 / n_t) * np.sqrt(sigma6_sum2)  # shape (nbins_perp,)
+    
+        return sigma7
