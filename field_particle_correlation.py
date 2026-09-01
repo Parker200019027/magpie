@@ -624,10 +624,10 @@ def _project_cartesian(c_dict, vpar, vperp_1, vperp_2, f,
     return result, c_dict
 
 
-def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
+def _correlate_chunk(dist_chunk, e_filt_dist, scpot_dist, eigen, vth, ve0,
                      species, counts_to_mask,
                      vpar_edges, vperp_edges, vperp1_edges, vperp2_edges,
-                     nbins, projection, ecut, d3v,
+                     nbins, projection, ecut, d3v, mean_f,
                      fac_mode='fixed', b_xyz=None, b_times=None,
                      v_ms_avg=None):
     '''
@@ -719,6 +719,12 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
         [(d['start_time'] + d['end_time']) * 0.5 for d in dist_chunk], dtype=float
     )
     energy = np.array([d['energy'] for d in dist_chunk], dtype=float)
+    if len(scpot_dist) != len(dist_chunk):
+        raise ValueError(
+            f"scpot_dist length ({len(scpot_dist)}) does not match "
+            f"dist_chunk length ({len(dist_chunk)})."
+        )
+    energy = energy - scpot_dist[:, np.newaxis, np.newaxis, np.newaxis]
     theta  = np.deg2rad(np.array([dist_chunk[0]['theta']], dtype=float))
     phi    = np.deg2rad(np.array([dist_chunk[0]['phi']],   dtype=float))
 
@@ -733,18 +739,17 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
 
     v = np.sqrt(2 * energy * np.abs(q) / mass)
 
-    # --- Interpolate pre-filtered E onto this chunk's distribution times ---
-    store_data('_e_filt_full', data={'x': e_filt_times, 'y': e_filt_y})
-    tinterpol('_e_filt_full', t_dist, newname='_e_filt_chunk')
-    e_interp = get_data('_e_filt_chunk')
-    if e_interp is None:
-        raise ValueError("Could not interpolate pre-filtered E field onto chunk times.")
+    if len(e_filt_dist) != len(dist_chunk):
+        raise ValueError(
+            f"e_filt_dist length ({len(e_filt_dist)}) does not match "
+            f"dist_chunk length ({len(dist_chunk)})."
+        )
+    e_interp_y = e_filt_dist   # already index-aligned with dist_chunk, shape (N_t, 3)
 
     # --- Distribution fluctuations ---
     f = np.array([d['data'] * 1e12 for d in dist_chunk], dtype=float)
     if not np.any(np.isfinite(f)):
         raise ValueError("Distribution data in chunk contains no finite values.")
-    mean_f = np.nanmean(f, axis=0)
     del_f  = f - mean_f
 
     # --- Velocity vectors in instrument frame (GSE), bulk-subtracted ---
@@ -759,9 +764,9 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
 
     if fac_mode == 'fixed':
         # --- Vectorised path: single basis applied to whole chunk ---
-        epar    = np.dot(e_interp.y * 1e-3, eigen[0])   # (N_t,)
-        eperp_1 = np.dot(e_interp.y * 1e-3, eigen[1])
-        eperp_2 = np.dot(e_interp.y * 1e-3, eigen[2])
+        epar    = np.dot(e_interp_y * 1e-3, eigen[0])
+        eperp_1 = np.dot(e_interp_y * 1e-3, eigen[1])
+        eperp_2 = np.dot(e_interp_y * 1e-3, eigen[2])
 
         vpar    = np.tensordot(vvec, eigen[0], axes=([-1], [0]))   # (N_e, N_th, N_ph)
         vperp_1 = np.tensordot(vvec, eigen[1], axes=([-1], [0]))
@@ -826,7 +831,7 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
         e_perp1_t  = bxvxb / bxvxb_norm
 
         # --- Project E onto per-timestep basis ---
-        e_vm     = e_interp.y * 1e-3               # (n_t, 3)
+        e_vm     = e_interp_y * 1e-3               # (n_t, 3)
         epar_t   = np.einsum('ti,ti->t', e_vm, e_par_t)
         eperp1_t = np.einsum('ti,ti->t', e_vm, e_perp1_t)
         eperp2_t = np.einsum('ti,ti->t', e_vm, e_perp2_t)
@@ -842,12 +847,6 @@ def _correlate_chunk(dist_chunk, e_filt_y, e_filt_times, eigen, vth, ve0,
         vpar_t    = np.einsum('teapx,tx->teap', vvec, e_par_t)    # (N_t, N_e, N_th, N_ph)
         vperp_1_t = np.einsum('teapx,tx->teap', vvec, e_perp1_t)
         vperp_2_t = np.einsum('teapx,tx->teap', vvec, e_perp2_t)
-
-        # Diagnostic prints (retained from development; can be removed for production)
-        print('epar_t mean:                  ', np.nanmean(epar_t))
-        print('e_par_t.mean(axis=0):         ', e_par_t.mean(axis=0).round(4))
-        print('dot(e_par_t_mean, eigen_par): ', np.dot(e_par_t.mean(axis=0), mean_e_par).round(6))
-        print('e_interp.y mean (mV/m):       ', np.nanmean(e_interp.y, axis=0).round(6))
 
         # Per-timestep raw correlation: (N_t, N_e, N_th, N_ph)
         c_par_raw = q * vpar_t * epar_t[:, None, None, None] * del_f
@@ -1096,6 +1095,7 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
         e_filt_y = e_smooth.y
 
     e_filt_times = e_smooth.times
+    store_data('_e_used', {'x': e_filt_times, 'y': e_filt_y})
 
     vth = _compute_vth(species, spacecraft_id, direction)
     if vth <= 0 or not np.isfinite(vth):
@@ -1114,6 +1114,13 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     _dphi        = np.full_like(_phi_rad, np.deg2rad(360.0/32))
     _dtheta      = np.abs(np.gradient(_theta_rad, axis=2))
     d3v          = _v0**2 * np.cos(_theta_rad) * _dv * _dphi * _dtheta
+    scpot        = get_data(f'mms{spacecraft_id}_edp_scpot_brst_l2')
+    
+    if scpot is None:
+        raise ValueError(f"Could not retrieve scpot variable 'mms{spacecraft_id}_edp_scpot_brst_l2'.")
+        
+    _, scpot_data = boxcar_averager(scpot.times, scpot.y, e_filt_times)
+    mean_f        = np.nanmean(np.array([d['data'] * 1e12 for d in dist], dtype=float), axis=0)
 
     # --- Velocity grid edges ---
     if vpar_edges is None:
@@ -1138,77 +1145,89 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     is_interleaved = dist[0]['energy'].tolist() != dist[1]['energy'].tolist()
 
-    def _run_on_subset(subset):
-        '''Run _correlate_chunk on a subset of dists, handling interleave.'''
-
-        chunk_kwargs = dict(
-            e_filt_y       = e_filt_y,
-            e_filt_times   = e_filt_times,
-            eigen          = eigen,
-            vth            = vth,
-            ve0            = ve0,
-            species        = species,
-            counts_to_mask = counts_to_mask,
-            vpar_edges     = vpar_edges,
-            vperp_edges    = vperp_edges,
-            vperp1_edges   = vperp1_edges,
-            vperp2_edges   = vperp2_edges,
-            nbins          = _nbins,
-            projection     = projection,
-            ecut           = ecut,
-            d3v            = d3v,
-            fac_mode       = fac_mode,
-            b_xyz          = b_xyz,
-            b_times        = b_times,
-            v_ms_avg       = v_ms_avg,
-        )
-
-        if is_interleaved:
-            r0, c_dict0, c_ts_dict0 = _correlate_chunk(list(subset[0::2]), **chunk_kwargs)
-            r1, c_dict1, c_ts_dict1 = _correlate_chunk(list(subset[1::2]), **chunk_kwargs)
-
-            counts   = r0['counts'] + r1['counts']
-            sumF     = r0['sumF']   + r1['sumF']
-            f_binned = sumF / np.where(counts > 0, counts, np.nan)
-            merged   = {'counts': counts, 'f_binned': f_binned, 'sumF': sumF}
-
-            for key in ('par', 'perp1', 'perp2'):
-                sumC     = r0[key]['sumC'] + r1[key]['sumC']
-                c_binned = sumC / np.where(counts > 0, counts, np.nan)
-                merged[key] = {'c_binned': c_binned, 'sumC': sumC}
-
-            # Average the pre-binning c_dict arrays across the two interleave sets
-            c_dict_merged = {
-                key: (c_dict0[key] + c_dict1[key]) / 2.0
-                for key in ('par', 'perp1', 'perp2')
-            }
-            # Concatenate c_par_ts in time order (interleaved distributions are
-            # already in chronological order within each subset)
-            c_ts_dict_merged = {
-                'par':   (c_ts_dict0['par'] + c_ts_dict1['par']) / 2.0,
-                'perp1': (c_ts_dict0['perp1'] + c_ts_dict1['perp1']) / 2.0,
-                'perp2': (c_ts_dict0['perp2'] + c_ts_dict1['perp2']) / 2.0,
-            }
-
-            return merged, c_dict_merged, c_ts_dict_merged
-        else:
-            return _correlate_chunk(list(subset), **chunk_kwargs)
+    def _run_on_subset(subset, e_subset, scpot_subset):
+            '''Run _correlate_chunk on a subset of dists, handling interleave.'''
+    
+            base_kwargs = dict(
+                eigen          = eigen,
+                vth            = vth,
+                ve0            = ve0,
+                species        = species,
+                counts_to_mask = counts_to_mask,
+                vpar_edges     = vpar_edges,
+                vperp_edges    = vperp_edges,
+                vperp1_edges   = vperp1_edges,
+                vperp2_edges   = vperp2_edges,
+                nbins          = _nbins,
+                projection     = projection,
+                ecut           = ecut,
+                d3v            = d3v,
+                mean_f         = mean_f,
+                fac_mode       = fac_mode,
+                b_xyz          = b_xyz,
+                b_times        = b_times,
+                v_ms_avg       = v_ms_avg,
+            )
+    
+            if is_interleaved:
+                r0, c_dict0, c_ts_dict0 = _correlate_chunk(
+                    list(subset[0::2]), e_filt_dist=e_subset[0::2],
+                    scpot_dist=scpot_subset[0::2], **base_kwargs
+                )
+                r1, c_dict1, c_ts_dict1 = _correlate_chunk(
+                    list(subset[1::2]), e_filt_dist=e_subset[1::2],
+                    scpot_dist=scpot_subset[1::2], **base_kwargs
+                )
+    
+                counts   = r0['counts'] + r1['counts']
+                sumF     = r0['sumF']   + r1['sumF']
+                f_binned = sumF / np.where(counts > 0, counts, np.nan)
+                merged   = {'counts': counts, 'f_binned': f_binned, 'sumF': sumF}
+    
+                for key in ('par', 'perp1', 'perp2'):
+                    sumC     = r0[key]['sumC'] + r1[key]['sumC']
+                    c_binned = sumC / np.where(counts > 0, counts, np.nan)
+                    merged[key] = {'c_binned': c_binned, 'sumC': sumC}
+    
+                # Average the pre-binning c_dict arrays across the two interleave sets
+                c_dict_merged = {
+                    key: (c_dict0[key] + c_dict1[key]) / 2.0
+                    for key in ('par', 'perp1', 'perp2')
+                }
+                # Concatenate c_par_ts in time order (interleaved distributions are
+                # already in chronological order within each subset)
+                c_ts_dict_merged = {
+                    'par':   (c_ts_dict0['par'] + c_ts_dict1['par']) / 2.0,
+                    'perp1': (c_ts_dict0['perp1'] + c_ts_dict1['perp1']) / 2.0,
+                    'perp2': (c_ts_dict0['perp2'] + c_ts_dict1['perp2']) / 2.0,
+                }
+    
+                return merged, c_dict_merged, c_ts_dict_merged
+            else:
+                return _correlate_chunk(
+                    list(subset), e_filt_dist=e_subset,
+                    scpot_dist=scpot_subset, **base_kwargs
+                )
 
     # =========================================================================
     # CHUNK LOOP — single chunk for full interval, n chunks for time-resolved
     # =========================================================================
 
     if n_subintervals is not None:
-        n = int(n_subintervals)
-        if n < 2:
-            raise ValueError(f"n_subintervals must be >= 2, got {n}")
-        if len(dist) < n:
-            raise ValueError(
-                f"n_subintervals ({n}) exceeds number of distributions ({len(dist)})"
-            )
-        chunks = np.array_split(dist, n)
+            n = int(n_subintervals)
+            if n < 2:
+                raise ValueError(f"n_subintervals must be >= 2, got {n}")
+            if len(dist) < n:
+                raise ValueError(
+                    f"n_subintervals ({n}) exceeds number of distributions ({len(dist)})"
+                )
+            chunks       = np.array_split(dist, n)
+            e_chunks     = np.array_split(e_filt_y, n)
+            scpot_chunks = np.array_split(scpot_data, n)
     else:
-        chunks = [dist]
+            chunks       = [dist]
+            e_chunks     = [e_filt_y]
+            scpot_chunks = [scpot_data]
 
     chunk_results  = []
     c_dict_list    = []
@@ -1217,9 +1236,14 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     c_ts_lists = {'par': [], 'perp1': [], 'perp2': []}
     
-    for chunk in chunks:
+    for chunk, e_chunk, scpot_chunk in zip(chunks, e_chunks, scpot_chunks):
         chunk = list(chunk)
-        r, c_dict, c_ts_dict = _run_on_subset(chunk)
+        if len(e_chunk) != len(chunk) or len(scpot_chunk) != len(chunk):
+            raise ValueError(
+                f"Chunk length mismatch: dist={len(chunk)}, "
+                f"e_chunk={len(e_chunk)}, scpot_chunk={len(scpot_chunk)}"
+            )
+        r, c_dict, c_ts_dict = _run_on_subset(chunk, e_chunk, scpot_chunk)
         chunk_results.append(r)
         c_dict_list.append(c_dict)
         for key in c_ts_lists:
