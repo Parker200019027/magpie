@@ -332,6 +332,27 @@ def _instantaneous_basis(b_vec, v_ms_avg):
 
     return e_par, e_perp1, e_perp2
 
+def bandpass(data, low_cutoff, high_cutoff, sample_rate, order):
+    try:
+        data = np.asarray(data, dtype=float)
+    except (ValueError, TypeError) as e:
+        raise TypeError(f"Could not convert data to numpy array: {e}")
+
+    if sample_rate <= 0:
+        raise ValueError(f"sample_rate must be positive, got {sample_rate}")
+    if low_cutoff <= 0:
+        raise ValueError(f"low_cutoff must be positive, got {low_cutoff}")
+    if high_cutoff >= sample_rate / 2:
+        raise ValueError(f"high_cutoff ({high_cutoff} Hz) must be less than Nyquist ({sample_rate/2} Hz).")
+    if low_cutoff >= high_cutoff:
+        raise ValueError(f"low_cutoff ({low_cutoff}) must be less than high_cutoff ({high_cutoff}).")
+    if not np.all(np.isfinite(data)):
+        raise ValueError("data contains NaN or Inf values.")
+
+    sos = scipy.signal.butter(order, [low_cutoff, high_cutoff], 'bandpass',
+                              fs=sample_rate, output='sos')
+    return scipy.signal.sosfiltfilt(sos, data, axis=0)
+
 
 def highpass(data, cutoff, sample_rate, order):
     '''
@@ -904,7 +925,7 @@ def _correlate_chunk(dist_chunk, e_filt_dist, scpot_dist, eigen, vth, ve0,
 
 
 def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
-                                cutoff=1, order=5, direction='parallel',
+                                cutoff=1, cutoff_high=None, order=5, direction='parallel',
                                 species='electron', counts_to_mask=0,
                                 spacecraft_id=1, vpar_edges=None, vperp_edges=None,
                                 vperp1_edges=None, vperp2_edges=None,
@@ -1090,7 +1111,15 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
 
     if apply_filter:
         sample_rate = 1 / np.median(np.diff(bulkv_data.times))
-        e_filt_y    = highpass(e_smooth.y, cutoff, sample_rate, order)
+        if cutoff_high is not None:
+            if cutoff_high >= sample_rate / 2:
+                raise ValueError(
+                    f"cutoff_high ({cutoff_high} Hz) exceeds Nyquist "
+                    f"({sample_rate/2:.2f} Hz) for this species cadence."
+                )
+            e_filt_y = bandpass(e_smooth.y, cutoff, cutoff_high, sample_rate, order)
+        else:
+            e_filt_y = highpass(e_smooth.y, cutoff, sample_rate, order)
     else:
         e_filt_y = e_smooth.y
 
