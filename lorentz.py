@@ -4,8 +4,9 @@ from pyspedas import get_data, store_data, tinterpol, subtract
 
 def boxcar_averager(data_times, data, interp_times):
   '''
-  Boxcar averages data onto interp_times using the neareast timestamps in data_times,
-  with window width determined by interp_times / data_times.
+  Boxcar averages data onto interp_times. Each window is centred on the
+  insertion index of the target time in data_times (np.searchsorted), with
+  width set by the ratio of the median spacings of interp_times and data_times.
 
   Parameters
   ----------
@@ -122,7 +123,15 @@ def boxcar_averager(data_times, data, interp_times):
 def lorentz(e_field, b_field, bulkv, spintone=None):
     '''
     Transforms the electric field from the spacecraft frame to the plasma frame
-    using the Lorentz transformation: E_plasma = E_sc + (v x B).
+    using the non-relativistic Lorentz transformation E_plasma = E_sc + (v x B),
+    with v the interval-mean ion bulk velocity.
+
+    B is interpolated onto the E cadence for the transform, and the result is
+    then boxcar averaged onto the bulkv cadence.
+
+    Note: field_particle_correlation.py contains its own internal lorentz(),
+    which uses a different cadence scheme and also returns b_times. This
+    standalone version is not called by field_particle_correlation.
 
     Parameters
     ----------
@@ -142,6 +151,10 @@ def lorentz(e_field, b_field, bulkv, spintone=None):
     smooth_name : str
         Tplot variable name of the Lorentz-transformed and smoothed E field,
         stored as 'e_field_transformed_smooth'.
+    b_xyz : ndarray
+        B field interpolated onto the E field cadence, shape (N_E, 3), in nT.
+    v_ms_avg : ndarray
+        Mean (spintone-corrected, if given) bulk velocity, shape (3,), in m/s.
 
     Raises
     ------
