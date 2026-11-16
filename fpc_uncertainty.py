@@ -15,42 +15,23 @@ def fpc_uncertainty(dist,
                     result=None,
                     direction='parallel'):
     '''
-    Propagates Poisson counting uncertainties through the FPC pipeline
-    following Afshari et al. Table B1 and Appendix B
+    Propagates Poisson counting uncertainties through the FPC pipeline,
+    following Afshari et al. (2021) Table B1 and Appendix B
     https://doi.org/10.1029/2021JA029578.
 
-    *Temporary Correct Version*
-    
     The electric field is treated as exact (no systematic uncertainty),
     consistent with Afshari et al. Appendix B. All uncertainty propagates
     from the Poisson counting statistics reported in the FPI level 2
     disterr variable.
 
-    Two projections are supported, matching field_particle_correlation:
+    The uncertainty is propagated per distribution through the chain
+    sigma -> sigma1 (uncertainty on the mean f) -> sigma2 (on delta_f)
+    -> sigma3 (on C') -> sigma4 (binned) -> sigma5 (reduced line)
+    -> sigma6 (C' to C conversion), and the per-distribution sigma6 values
+    are combined in quadrature and divided by N_t to give sigma7, the
+    uncertainty on the time-averaged reduced correlation C.
 
-    - 'gyro'      : 2D (v_par, |v_perp|) grid. sigma_5 follows Afshari
-                    et al. Table B1 exactly, with cylindrical 2pi*v_perp
-                    weighting. Returns sigma_perp as the uncertainty on
-                    the reduced perpendicular line C(v_perp).
-    - 'cartesian' : 3D (v_par, v_perp1, v_perp2) grid. sigma_5 is the
-                    cartesian analogue, integrating sigma_4 in quadrature
-                    over the appropriate axes for each component.
-
-    The signal_threshold parameter controls which bins are included when
-    integrating sigma_4 into sigma_5 and sigma_perp. Velocity-space bins
-    at the edges of the distribution are often sparsely sampled — only
-    a handful of particles land there by chance. Because sigma_4 is
-    proportional to 1/counts, these bins have large individual
-    uncertainties but contribute negligible signal. When sigma_4 is
-    integrated in quadrature across velocity space, these outlier bins
-    can dominate the sum and produce an unrealistically large integrated
-    uncertainty that bears no relation to the actual signal quality.
-
-    The threshold works by masking any sigma_4 bin where the corresponding
-    c_binned value is less than signal_threshold * max(|c_binned|). Only
-    bins that contribute meaningfully to the signal are then included in
-    the quadrature sum. The raw sigma_4 array is always returned unmasked
-    so per-bin information is preserved. Set signal_threshold=0 to disable.
+    Only the gyrotropic ('gyro') projection is currently implemented.
 
     Parameters
     ----------
@@ -59,7 +40,7 @@ def fpc_uncertainty(dist,
         'start_time', 'end_time', 'energy', 'theta', 'phi', 'data'.
     eigen : list of ndarray
         FAC basis vectors [e_par, e_perp1, e_perp2], each shape (3,).
-        Must be the same eigen used in the FPC computation.
+        Must be the same eigen used in the FPC computation (fixed FAC mode).
     vth : float
         Thermal velocity in m/s. Must be the same vth used in the FPC
         computation.
@@ -67,58 +48,51 @@ def fpc_uncertainty(dist,
         Mean bulk velocity in m/s, shape (3,).
     edges : dict
         Velocity grid edges from field_particle_correlation. Must contain
-        'vpar'. Gyro mode also requires 'vperp'. Cartesian mode also
-        requires 'vperp1' and 'vperp2'.
+        'vpar' and 'vperp'.
     spacecraft_id : int, optional
         MMS spacecraft ID (1-4). Default is 1.
     species : str, optional
         'ion' or 'electron'. Default is 'electron'.
     projection : str, optional
-        'gyro' or 'cartesian'. Must match the projection used in
-        field_particle_correlation. Default is 'gyro'.
+        Must be 'gyro'. 'cartesian' passes validation but is not yet
+        implemented. Default is 'gyro'.
     counts_to_mask : int, optional
-        Minimum bin count threshold below which sigma_4 is set to NaN.
+        Minimum estimated count per energy-angle bin, (f / disterr)^2, below
+        which that bin's disterr is set to NaN before propagation.
         Default is 0.
-    signal_threshold : float, optional
-        Fractional threshold relative to the peak signal. Bins in sigma_4
-        where the corresponding c_binned value is below
-        signal_threshold * max(|c_binned|) are excluded from the
-        quadrature integration into sigma_5 and sigma_perp. Default 1e-3.
-        Set to 0 to disable.
     ecut : float or None, optional
         Optional photoelectron energy cut in eV. Default is None.
+    result : optional
+        Currently unused.
+    direction : str, optional
+        'parallel' returns the uncertainty on the reduced parallel
+        correlation C(v_par). 'perpendicular' returns the uncertainty on the
+        reduced perpendicular correlation C(v_perp), combining the perp1 and
+        perp2 components in quadrature. Default is 'parallel'.
 
     Returns
     -------
-    uncertainty : dict
-        Keys:
-            'sigma3' : dict with keys 'par', 'perp1', 'perp2'
-                       Shape (N_t, N_energy, N_theta, N_phi).
-            'sigma4' : dict with keys 'par', 'perp1', 'perp2'
-                       Gyro:      shape (nbins_par, nbins_perp)
-                       Cartesian: shape (nbins_par, nbins_perp1, nbins_perp2)
-                       Raw binned uncertainty, unmasked.
-            'sigma5' : dict with keys 'par', 'perp1', 'perp2'
-                       Shape (nbins,). Computed after signal threshold masking.
-            'sigma6' : dict, same shape as sigma5.
-            'sigma7' : dict, same shape as sigma5.
-            'sigmaf' : dict with keys 'par', 'perp1', 'perp2' — scalars.
-            'sigma_perp' : dict with keys 'perp1', 'perp2' [gyro only]
-                       Uncertainty on the reduced perpendicular line C(v_perp).
-                       None in cartesian mode.
+    sigma7 : ndarray
+        Uncertainty on the time-averaged reduced correlation C.
+        Shape (nbins_par,) for direction='parallel',
+        (nbins_perp,) for direction='perpendicular'.
 
     Raises
     ------
     ValueError
-        If required tplot variables cannot be retrieved, disterr is
-        unavailable, the pre-processed E field has not been stored, or
-        projection is invalid.
+        If projection is invalid, disterr cannot be retrieved, the
+        pre-processed E field has not been stored, or interpolation fails.
 
     Notes
     -----
     Requires field_particle_correlation to have been run first so that
-    'e_field_transformed_smooth' exists in the tplot store.
-    Ion cadence uses dt=0.15s for n_d; electron cadence uses dt=0.03s.
+    'e_field_transformed_smooth' exists in the tplot store, and requires
+    the species bulkv tplot variable
+    'mms{id}_d{e|i}s_bulkv_gse_brst' to be loaded.
+
+    The E field is highpass filtered here with a fixed 5th-order
+    Butterworth filter at 1 Hz, independent of the cutoff, cutoff_high and
+    order passed to field_particle_correlation.
     '''
 
     if projection not in ('gyro', 'cartesian'):
