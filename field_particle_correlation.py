@@ -5,8 +5,9 @@ import scipy.signal
 
 def boxcar_averager(data_times, data, interp_times):
     '''
-    Boxcar averages data onto interp_times using the nearest timestamps in
-    data_times, with window width determined by interp_times / data_times.
+    Boxcar averages data onto interp_times. Each window is centred on the
+    insertion index of the target time in data_times (np.searchsorted), with
+    width set by the ratio of the median spacings of interp_times and data_times.
 
     Parameters
     ----------
@@ -89,11 +90,14 @@ def boxcar_averager(data_times, data, interp_times):
 def lorentz(e_field, b_field, bulkv, spintone=None):
     '''
     Transforms the electric field from the spacecraft frame to the plasma frame
-    using the Lorentz transformation: E_plasma = E_sc + (v x B).
+    using the non-relativistic Lorentz transformation E_plasma = E_sc + (v x B),
+    with v the interval-mean ion bulk velocity.
 
     The E field is first smoothed (boxcar averaged) down to the B field cadence
-    before the rotation, so that E and B share a common time axis at the FGM
-    resolution. No interpolation of B is required.
+    before the transform, so that E and B share a common time axis at the FGM
+    resolution and no interpolation of B is required. The transformed field is
+    then boxcar averaged again onto the bulkv (particle) cadence and stored as
+    'e_field_transformed_smooth'.
 
     Parameters
     ----------
@@ -716,9 +720,10 @@ def _correlate_chunk(dist_chunk, e_filt_dist, scpot_dist, eigen, vth, ve0,
     c_dict : dict
         Pre-binning correlation arrays keyed by 'par', 'perp1', 'perp2',
         each shape (N_energy, N_theta, N_phi). Returned for diagnostic access.
-    c_par_ts_raw : ndarray, shape (N_t,)
-        Per-timestep parallel heating rate from direct velocity-space
-        integration: sum_v q * v_par * E_par * delta_f * d3v.
+    c_ts_dict : dict
+        Per-timestep energy transfer rates from direct velocity-space
+        integration, keyed by 'par', 'perp1', 'perp2', each shape (N_t,).
+        e.g. 'par' = sum_v q * v_par * E_par * delta_f * d3v.
 
     Raises
     ------
@@ -933,9 +938,12 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
                                 n_subintervals=None, projection='gyro', ecut=None,
                                 fac_mode='fixed'):
     '''
-    Computes the field-particle correlation C(v) for all three FAC field
-    components (E_par, E_perp1, E_perp2) simultaneously, binned onto a
-    velocity-space grid normalised by the thermal velocity.
+    Computes the field-particle correlation C'(v) = q v_i E_i delta_f for all
+    three FAC field components (E_par, E_perp1, E_perp2) simultaneously,
+    binned onto a velocity-space grid normalised by the thermal velocity.
+
+    Note this is the C' form. The C = -q (v_par^2 / 2) d(delta_f)/dv_par E_par
+    form can be obtained from C' by finite differencing in velocity.
 
     All preprocessing (Lorentz transform, highpass filter, FAC basis, thermal
     velocity) is performed once on the full interval. The core correlation is
@@ -971,7 +979,12 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     spintone : str, optional
         Tplot variable name for the spintone correction (km/s).
     cutoff : float, optional
-        Highpass filter cutoff frequency in Hz. Default is 1.
+        Highpass filter cutoff frequency in Hz, or the lower edge of the band
+        if cutoff_high is set. Default is 1.
+    cutoff_high : float or None, optional
+        Upper band edge in Hz. If set, a Butterworth bandpass between cutoff
+        and cutoff_high is applied instead of the highpass. Must be below the
+        Nyquist frequency of the particle cadence. Default is None (highpass).
     order : int, optional
         Butterworth filter order. Default is 5.
     direction : str, optional
@@ -1052,9 +1065,10 @@ def field_particle_correlation(dist, e_field, b_field, bulkv, spintone=None,
     ve0 : ndarray, shape (3,)
         Mean bulk velocity in m/s used for frame shift.
 
-    c_par_ts_full : ndarray, shape (N_t_total,)
-        Full time series of per-distribution parallel heating rate from direct
-        velocity-space integration: sum_v q * v_par * E_par * delta_f * d3v.
+    c_ts_dict_full : dict
+        Full time series of per-distribution energy transfer rates from direct
+        velocity-space integration, keyed by 'par', 'perp1', 'perp2', each
+        shape (N_t_total,). e.g. 'par' = sum_v q * v_par * E_par * delta_f * d3v.
 
     Raises
     ------
