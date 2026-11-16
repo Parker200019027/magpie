@@ -3,17 +3,20 @@ import numpy as np
 def current_density(n, vp, ve):
 
   '''
-  Returns j as a 4D array with dimensions (x, y, z, magnitude) calculated by j = n * q * (vp-ve). Assumes all products have been interpolated/smoothed onto same
-  cadence.
+  Returns the current density j = n * q * (vp - ve) as an (N, 4) array with
+  columns (jx, jy, jz, |j|). Assumes all products have been interpolated or
+  smoothed onto the same cadence.
 
   Parameters
   ----------
 
   n : array-like
-    FPI numberdensity level 2 product. Units in cm^3. Quasineutrality is assumed
+    FPI numberdensity level 2 product, shape (N,). Units in cm^-3.
+    Quasineutrality is assumed.
 
   vp : array-like
-    FPI proton bulkv level 2 product. Units in km/s. Shape (N, 3)
+    FPI ion (DIS) bulkv level 2 product, ions assumed to be protons.
+    Units in km/s. Shape (N, 3)
 
   ve : array-like
     FPI electron bulkv level 2 product. Units in km/s. Shape (N, 3)
@@ -21,7 +24,7 @@ def current_density(n, vp, ve):
   Returns
   -------
   j : ndarray
-      Current density with with shape (N, 4) where columns are [jx, jy, jz, |j|].
+      Current density with shape (N, 4) where columns are [jx, jy, jz, |j|].
         Units in A/m^2
 
   Raises
@@ -109,7 +112,7 @@ def current_density(n, vp, ve):
       raise ValueError("Number density n cannot contain negative values")
     
   # Warn if density is suspiciously high or low (optional, can be removed if too strict)
-  if np.any(n > 1e8):  # > 10^8 cm^-3 is very high for magnetosphere
+  if np.any(n > 1e8):  # > 10^8 cm^-3 is unphysically high for near-Earth plasma
       import warnings
       warnings.warn(
           f"Density contains very high values (max: {np.max(n):.2e} cm^-3). "
@@ -121,7 +124,7 @@ def current_density(n, vp, ve):
   q = 1.60217663e-19  # Elementary charge in C
 
   # Unit conversions
-  n = n * 1e6 # cm^3 to m^3
+  n = n * 1e6 # cm^-3 to m^-3
 
   vp = vp * 1e3 # km/s to m/s
 
@@ -137,5 +140,3 @@ def current_density(n, vp, ve):
   j = np.hstack([j_vec, j_mag[:, None]])
 
   return j
-
-  
