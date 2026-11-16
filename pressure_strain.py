@@ -7,7 +7,8 @@ def pressure_strain(prestensor, positions, bulkv_arr):
     burst mode data using the reciprocal vector method for spatial gradients.
 
     Pi-D = -Π:D  (incompressive pressure-strain interaction)
-    p·θ  = p * ∇·u  (compressive pressure-strain interaction)
+    p·θ  = p * ∇·u  (pressure dilatation; the compressive pressure-strain
+                    interaction is -p·θ)
 
     Parameters
     ----------
@@ -28,7 +29,8 @@ def pressure_strain(prestensor, positions, bulkv_arr):
         Pi-D time series. Units in nPa/s.
 
     p_theta : ndarray, shape (N,)
-        Pressure dilatation time series. Units in nPa/s.
+        Pressure dilatation p·θ = p ∇·u time series, returned with a positive
+        sign (positive for expansion). Units in nPa/s.
 
     Raises
     ------
@@ -42,7 +44,9 @@ def pressure_strain(prestensor, positions, bulkv_arr):
     All inputs must be in the same coordinate frame (GSE recommended).
     Positions must be interpolated onto the FPI burst mode time grid before
     calling this function (MEC cadence ~30s vs FPI burst ~150ms).
-    The full pressure-strain interaction is p·θ + Pi-D.
+    The full pressure-strain interaction is
+    -(P·∇)·u = -p·θ + Pi-D = -p_theta + pi_d,
+    so p_theta enters the total with a minus sign.
 
     References
     ----------
